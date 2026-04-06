@@ -359,7 +359,7 @@ with tab_dash:
         marker=dict(size=9, color="#fd79a8", symbol="diamond",
                     line=dict(color="white", width=1.5)),
         hovertemplate="<b>%{x|%b %d %Y}</b><br>Forecast: $%{y:.3f}/gal<extra></extra>"))
-    fig.add_vline(x=datetime.now().strftime("%Y-%m-%d"),
+    fig.add_vline(x=datetime.now().timestamp() * 1000,
                   line_dash="dash", line_color="rgba(255,255,255,.18)",
                   annotation_text="Today",
                   annotation_font_color="rgba(255,255,255,.35)")
