@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 import joblib
 from datetime import datetime, timedelta
-from sklearn.ensemble import GradientBoostingRegressor
+from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_absolute_error
 
@@ -21,10 +21,10 @@ MODEL_PATH = os.path.join(_ROOT, "models", "gas_price_model.pkl")
 
 
 class GasPricePredictor:
-    """Wraps a GradientBoostingRegressor with train / predict / persist helpers."""
+    """Wraps a RandomForestRegressor with train / predict / forecast / persist helpers."""
 
     def __init__(self):
-        self.model: GradientBoostingRegressor | None = None
+        self.model: RandomForestRegressor | None = None
         os.makedirs(os.path.dirname(MODEL_PATH), exist_ok=True)
 
     # ------------------------------------------------------------------
@@ -34,6 +34,12 @@ class GasPricePredictor:
         """Train on a historical price DataFrame. Returns evaluation metrics."""
         feat_df = create_features(df).dropna(subset=FEATURE_COLS + ["price"])
 
+        # Use only the most recent 365 days per city to keep training fast
+        feat_df = (feat_df.sort_values("date")
+                          .groupby("city")
+                          .tail(365)
+                          .reset_index(drop=True))
+
         X = feat_df[FEATURE_COLS]
         y = feat_df["price"]
 
@@ -42,12 +48,12 @@ class GasPricePredictor:
             X, y, test_size=0.12, shuffle=False
         )
 
-        self.model = GradientBoostingRegressor(
-            n_estimators=200,
-            learning_rate=0.08,
-            max_depth=5,
-            subsample=0.8,
-            min_samples_leaf=5,
+        # RandomForest: parallel (n_jobs=-1), trains in seconds even on large data
+        self.model = RandomForestRegressor(
+            n_estimators=100,
+            max_depth=10,
+            min_samples_leaf=3,
+            n_jobs=-1,
             random_state=42,
         )
         self.model.fit(X_train, y_train)

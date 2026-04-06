@@ -265,7 +265,7 @@ for col, label, val, sub, unit, cls in [
     (k1, "Today's Price",    f"${today_p:.2f}",
      f"{_arrow(daily_chg)} {daily_chg:+.3f} vs yesterday", "per gallon · "+gas_type, _col(daily_chg)),
     (k2, "Tomorrow Forecast",f"${tomorrow_p:.2f}",
-     f"{_arrow(tomorrow_chg)} {tomorrow_chg:+.3f} projected", "ML · GBR model", _col(tomorrow_chg)),
+     f"{_arrow(tomorrow_chg)} {tomorrow_chg:+.3f} projected", "ML · Random Forest", _col(tomorrow_chg)),
     (k3, "7-Day Change",     f"{_arrow(weekly_chg)} {abs(weekly_chg):.3f}",
      f"{weekly_chg:+.3f} vs last week", "Weekly trend", _col(weekly_chg)),
     (k4, "WTI Crude Oil",    f"${crude:.2f}",
@@ -400,7 +400,7 @@ with tab_dash:
                 height=300, margin=dict(l=10,r=10,t=10,b=10))
             st.plotly_chart(fi_fig, use_container_width=True)
         st.markdown("""
-**Model:** Gradient Boosting Regressor (scikit-learn)  
+**Model:** Random Forest Regressor (scikit-learn, n_jobs=-1)  
 **Features:** 1/2/7/14/30-day lags · 7/30-day rolling avg · WTI crude · cyclical date encoding · city label · momentum  
 **Forecast:** auto-regressive — each predicted price feeds back as the next day's lag
 """)
