@@ -430,7 +430,7 @@ with tab_map:
         map_view = st.radio("Show", ["Today's Prices","Tomorrow's Forecast","Price Change"],
                             horizontal=True, label_visibility="collapsed")
     with mc2:
-        map_mode = st.radio("Style", ["Bubble Map","State Heatmap"],
+        map_mode = st.radio("Style", ["Bubble Map","US State Heatmap"],
                             horizontal=True, label_visibility="collapsed")
 
     if map_view == "Today's Prices":
@@ -446,7 +446,7 @@ with tab_map:
     if map_mode == "Bubble Map":
         plot_df = all_fc.copy()
         plot_df["bubble_size"] = plot_df[mcol].clip(lower=0.01)
-        map_fig = px.scatter_mapbox(
+        map_fig = px.scatter_map(
             plot_df, lat="lat", lon="lon",
             color=mcol, size="bubble_size",
             hover_name="city",
@@ -456,7 +456,7 @@ with tab_map:
             color_continuous_scale=cscale,
             size_max=40, zoom=2.4,
             center={"lat":47.0,"lon":-93.0},
-            mapbox_style="open-street-map",
+            map_style="open-street-map",
             labels={"today_typed":"Today","tomorrow_typed":"Tomorrow",
                     "chg":"Δ Price","state":"State"})
         map_fig.update_traces(
