@@ -528,11 +528,11 @@ with tab_map:
 
     # Instruction banner
     st.markdown(
-        '<div class="info-pill">🍁 Real gas stations loaded from <b>OpenStreetMap</b> '
-        'via your browser. Prices anchored to live <b>NRCan</b> city averages. '
+        '<div class="info-pill">🍁 Gas stations plotted from <b>NRCan city price data</b> '
+        'with realistic brand offsets. Prices anchored to live NRCan city averages. '
         'Click <b>📍 My Location</b> to centre on your position. '
         'Zoom into any station pin for the live price and 7-day forecast. '
-        'Stations reload automatically as you pan.</div>',
+        'Adjust the <b>Radius slider</b> to show nearby stations.</div>',
         unsafe_allow_html=True
     )
 
