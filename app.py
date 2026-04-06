@@ -159,13 +159,19 @@ with st.sidebar:
     gas_type   = st.selectbox("⛽ Gas Type", list(GAS_TYPES.keys()), index=0)
     multiplier = GAS_TYPES[gas_type]
 
+    _sb_canadian = (df[df["city"]==selected]["country"].iloc[-1] == "CA") if "country" in df.columns else False
+
     st.markdown("---")
     st.markdown("**✏️ Manual Price Override**")
     use_manual = st.checkbox("Enter today's price manually")
     manual_price = 0.0
     if use_manual:
-        manual_price = st.number_input("Today's price ($/gal)", 0.50, 9.99,
-                                       3.50, 0.01, "%.2f")
+        if _sb_canadian:
+            _inp_cad = st.number_input("Today's price (CAD/L)", 0.50, 4.00, 1.52, 0.01, "%.2f")
+            manual_price = _inp_cad * 3.785 / 1.36  # store internally as USD/gal
+        else:
+            manual_price = st.number_input("Today's price ($/gal)", 0.50, 9.99,
+                                           3.50, 0.01, "%.2f")
 
     st.markdown("---")
     st.markdown("**⚙️ Settings**")
@@ -175,8 +181,12 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("**🔔 Price Alert**")
     alert_on    = st.checkbox("Notify if price exceeds")
-    alert_limit = st.number_input("Threshold ($/gal)", 1.0, 9.0,
-                                  4.50, 0.10, "%.2f", disabled=not alert_on)
+    if _sb_canadian:
+        alert_limit = st.number_input("Threshold (CAD/L)", 0.50, 4.00,
+                                      1.75, 0.05, "%.2f", disabled=not alert_on)
+    else:
+        alert_limit = st.number_input("Threshold ($/gal)", 1.0, 9.0,
+                                      4.50, 0.10, "%.2f", disabled=not alert_on)
 
     st.markdown("---")
     st.markdown('<div class="info-pill">💡 Live <b>WTI crude oil</b> via Yahoo Finance.'
@@ -227,11 +237,35 @@ daily_chg    = today_p   - yesterday_p
 weekly_chg   = today_p   - week_ago_p
 tomorrow_chg = tomorrow_p - today_p
 
-# Canadian city: compute CAD/L equivalent for display
-_is_canadian = (city_df["country"].iloc[-1] == "CA") if "country" in city_df.columns else False
-_CAD_PER_USD  = 1.36
+# ── Display unit helpers (CAD/L for Canadian cities, USD/gal for US) ────────
+_is_canadian    = (city_df["country"].iloc[-1] == "CA") if "country" in city_df.columns else False
+_CAD_PER_USD    = 1.36
 _LITRES_PER_GAL = 3.785
-def _to_cad_litre(usd_gal): return usd_gal * _CAD_PER_USD / _LITRES_PER_GAL
+_UNIT           = "CAD/L" if _is_canadian else "$/gal"
+_CURR           = "C$"   if _is_canadian else "$"
+
+def _to_disp(usd_gal):
+    """Convert USD/gal → display unit (CAD/L for CA, USD/gal for US)."""
+    return usd_gal * _CAD_PER_USD / _LITRES_PER_GAL if _is_canadian else usd_gal
+
+def _fmt(usd_gal, d=3):
+    v = _to_disp(usd_gal)
+    return f"{v:.{d}f}"
+
+def _fmt_chg(usd_gal_delta, d=3):
+    v = usd_gal_delta * _CAD_PER_USD / _LITRES_PER_GAL if _is_canadian else usd_gal_delta
+    return f"{v:+.{d}f}"
+
+# Display-unit prices (what the user actually sees)
+today_disp     = _to_disp(today_p)
+yesterday_disp = _to_disp(yesterday_p)
+week_ago_disp  = _to_disp(week_ago_p)
+tomorrow_disp  = _to_disp(tomorrow_p)
+fc_prices_disp = [_to_disp(p) for p in fc_prices]
+
+daily_chg_disp    = today_disp  - yesterday_disp
+weekly_chg_disp   = today_disp  - week_ago_disp
+tomorrow_chg_disp = tomorrow_disp - today_disp
 
 def _col(d):   return "c-up" if d > 0.015 else ("c-down" if d < -0.015 else "c-flat")
 def _arrow(d): return "▲"   if d > 0.015 else ("▼"     if d < -0.015 else "●")
@@ -247,20 +281,22 @@ all_fc["trend"] = all_fc["chg"].apply(
 # Alerts
 # ─────────────────────────────────────────────────────────────────────────────
 if alert_on:
-    if today_p >= alert_limit:
+    _cmp_today  = today_disp
+    _cmp_tmrw   = tomorrow_disp
+    if _cmp_today >= alert_limit:
         st.markdown(
             f'<div class="alert-red">🚨 <b>Alert!</b> Current {gas_type} price '
-            f'<b>${today_p:.2f}/gal</b> exceeds <b>${alert_limit:.2f}/gal</b> in {selected}.</div>',
+            f'<b>{_fmt(today_p, 2)} {_UNIT}</b> exceeds <b>{alert_limit:.2f} {_UNIT}</b> in {selected}.</div>',
             unsafe_allow_html=True)
-    elif tomorrow_p >= alert_limit:
+    elif _cmp_tmrw >= alert_limit:
         st.markdown(
             f'<div class="alert-red">⚠️ Tomorrow\'s predicted price '
-            f'<b>${tomorrow_p:.2f}/gal</b> may exceed <b>${alert_limit:.2f}/gal</b>.</div>',
+            f'<b>{_fmt(tomorrow_p, 2)} {_UNIT}</b> may exceed <b>{alert_limit:.2f} {_UNIT}</b>.</div>',
             unsafe_allow_html=True)
     else:
         st.markdown(
-            f'<div class="alert-green">✅ Price <b>${today_p:.2f}/gal</b> is below your '
-            f'<b>${alert_limit:.2f}/gal</b> threshold.</div>', unsafe_allow_html=True)
+            f'<div class="alert-green">✅ Price <b>{_fmt(today_p, 2)} {_UNIT}</b> is below your '
+            f'<b>{alert_limit:.2f} {_UNIT}</b> threshold.</div>', unsafe_allow_html=True)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -268,25 +304,30 @@ if alert_on:
 # ─────────────────────────────────────────────────────────────────────────────
 k1, k2, k3, k4, k5 = st.columns(5)
 
-# For Canadian cities show "CAD/L" label; for US show "per gallon"
+# KPI averages — split US vs Canada
+_us_fc = all_fc[all_fc["city"].map(lambda c: not c.endswith((" ON"," BC"," AB"," QC"," MB")))]
+_ca_fc = all_fc[all_fc["city"].map(lambda c:     c.endswith((" ON"," BC"," AB"," QC"," MB")))]
+
 if _is_canadian:
-    _today_unit = f"{_to_cad_litre(today_p):.3f} CAD/L · " + gas_type
-    _tmrw_unit  = f"{_to_cad_litre(tomorrow_p):.3f} CAD/L forecast"
+    _avg_val   = _to_disp(_ca_fc["today_typed"].mean()) if len(_ca_fc) else today_disp
+    _avg_label = f"CA Avg · {gas_type}"
+    _avg_n     = len(_ca_fc)
 else:
-    _today_unit = "per gallon · " + gas_type
-    _tmrw_unit  = "ML · Random Forest"
+    _avg_val   = _us_fc["today_typed"].mean() if len(_us_fc) else all_fc["today_typed"].mean()
+    _avg_label = f"US Avg · {gas_type}"
+    _avg_n     = len(_us_fc)
 
 for col, label, val, sub, unit, cls in [
-    (k1, "Today's Price",    f"${today_p:.2f}",
-     f"{_arrow(daily_chg)} {daily_chg:+.3f} vs yesterday", _today_unit, _col(daily_chg)),
-    (k2, "Tomorrow Forecast",f"${tomorrow_p:.2f}",
-     f"{_arrow(tomorrow_chg)} {tomorrow_chg:+.3f} projected", _tmrw_unit, _col(tomorrow_chg)),
-    (k3, "7-Day Change",     f"{_arrow(weekly_chg)} {abs(weekly_chg):.3f}",
-     f"{weekly_chg:+.3f} vs last week", "Weekly trend", _col(weekly_chg)),
+    (k1, "Today's Price",    f"{_fmt(today_p, 2)}",
+     f"{_arrow(daily_chg_disp)} {_fmt_chg(daily_chg)} vs yesterday", _UNIT + " · " + gas_type, _col(daily_chg_disp)),
+    (k2, "Tomorrow Forecast",f"{_fmt(tomorrow_p, 2)}",
+     f"{_arrow(tomorrow_chg_disp)} {_fmt_chg(tomorrow_chg)} projected", "ML · Random Forest", _col(tomorrow_chg_disp)),
+    (k3, "7-Day Change",     f"{_arrow(weekly_chg_disp)} {abs(weekly_chg_disp):.3f}",
+     f"{_fmt_chg(weekly_chg)} vs last week", "Weekly trend", _col(weekly_chg_disp)),
     (k4, "WTI Crude Oil",    f"${crude:.2f}",
      "per barrel", "West Texas Intermediate", "c-blue"),
-    (k5, "US Avg Today",     f"${all_fc['today_typed'].mean():.2f}",
-     f"across {len(all_fc)} cities", "US average · "+gas_type, "c-flat"),
+    (k5, "Avg Today",        f"{_avg_val:.2f}",
+     f"across {_avg_n} cities", _avg_label, "c-flat"),
 ]:
     with col:
         st.markdown(
@@ -316,16 +357,16 @@ with tab_dash:
     fc_cols = st.columns(fc_days)
     fc_labels = ["Tomorrow"] + [
         (datetime.now() + timedelta(days=i+1)).strftime("%A") for i in range(1, fc_days)]
-    for idx, (col, lbl, price) in enumerate(zip(fc_cols, fc_labels, fc_prices)):
-        chg      = price - today_p
+    for idx, (col, lbl, price_usd, price_d) in enumerate(zip(fc_cols, fc_labels, fc_prices, fc_prices_disp)):
+        chg_d    = price_d - today_disp
         date_str = (datetime.now() + timedelta(days=idx+1)).strftime("%b %d")
         with col:
             st.markdown(
                 f'<div class="fc-card">'
                 f'<div class="fc-day">{lbl}</div>'
                 f'<div class="fc-date">{date_str}</div>'
-                f'<div class="fc-price {_col(chg)}">${price:.2f}</div>'
-                f'<div class="fc-chg">{_arrow(chg)} {chg:+.3f}/gal</div>'
+                f'<div class="fc-price {_col(chg_d)}">{price_d:.2f}</div>'
+                f'<div class="fc-chg">{_arrow(chg_d)} {chg_d:+.3f} {_UNIT}</div>'
                 f'</div>', unsafe_allow_html=True)
 
     st.markdown("<br>", unsafe_allow_html=True)
@@ -334,18 +375,19 @@ with tab_dash:
     st.markdown('<div class="sh">📈 Price History & Forecast</div>', unsafe_allow_html=True)
 
     chart_df = city_df.tail(hist_days).copy()
-    chart_df["price_typed"] = chart_df["price"] * multiplier
+    chart_df["price_disp"] = chart_df["price"].apply(lambda p: _to_disp(p * multiplier))
     fc_dates = [pd.Timestamp(datetime.now().date() + timedelta(days=i+1)) for i in range(fc_days)]
-    upper    = [p + 0.05 + i*0.009 for i, p in enumerate(fc_prices)]
-    lower    = [p - 0.05 - i*0.009 for i, p in enumerate(fc_prices)]
+    _band_w  = 0.05 * (_CAD_PER_USD / _LITRES_PER_GAL if _is_canadian else 1)
+    upper    = [p + _band_w + i*_band_w*0.18 for i, p in enumerate(fc_prices_disp)]
+    lower    = [p - _band_w - i*_band_w*0.18 for i, p in enumerate(fc_prices_disp)]
 
     fig = go.Figure()
     fig.add_trace(go.Scatter(
-        x=chart_df["date"], y=chart_df["price_typed"],
+        x=chart_df["date"], y=chart_df["price_disp"],
         mode="lines", name="Historical",
         line=dict(color="#74b9ff", width=2.5),
         fill="tozeroy", fillcolor="rgba(116,185,255,.06)",
-        hovertemplate="<b>%{x|%b %d %Y}</b><br>$%{y:.3f}/gal<extra></extra>"))
+        hovertemplate=f"<b>%{{x|%b %d %Y}}</b><br>%{{y:.3f}} {_UNIT}<extra></extra>"))
     fig.add_trace(go.Scatter(
         x=fc_dates + fc_dates[::-1], y=upper + lower[::-1],
         fill="toself", fillcolor="rgba(253,121,168,.09)",
@@ -353,23 +395,24 @@ with tab_dash:
         name="Confidence Band", hoverinfo="skip"))
     fig.add_trace(go.Scatter(
         x=[chart_df["date"].iloc[-1]] + fc_dates,
-        y=[float(chart_df["price_typed"].iloc[-1])] + fc_prices,
+        y=[float(chart_df["price_disp"].iloc[-1])] + fc_prices_disp,
         mode="lines+markers", name="Forecast",
         line=dict(color="#fd79a8", width=2.5, dash="dot"),
         marker=dict(size=9, color="#fd79a8", symbol="diamond",
                     line=dict(color="white", width=1.5)),
-        hovertemplate="<b>%{x|%b %d %Y}</b><br>Forecast: $%{y:.3f}/gal<extra></extra>"))
+        hovertemplate=f"<b>%{{x|%b %d %Y}}</b><br>Forecast: %{{y:.3f}} {_UNIT}<extra></extra>"))
     fig.add_vline(x=datetime.now().timestamp() * 1000,
                   line_dash="dash", line_color="rgba(255,255,255,.18)",
                   annotation_text="Today",
                   annotation_font_color="rgba(255,255,255,.35)")
+    _yaxis_prefix = "" if _is_canadian else "$"
     fig.update_layout(
         paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
         font=dict(color="#8ab4cc", size=12),
         xaxis=dict(gridcolor="rgba(255,255,255,.04)", tickformat="%b %d",
                    tickfont=dict(color="#4a6a7c")),
-        yaxis=dict(gridcolor="rgba(255,255,255,.04)", title="Price ($/gal)",
-                   titlefont=dict(color="#4a6a7c"), tickprefix="$",
+        yaxis=dict(gridcolor="rgba(255,255,255,.04)", title=f"Price ({_UNIT})",
+                   titlefont=dict(color="#4a6a7c"), tickprefix=_yaxis_prefix,
                    tickfont=dict(color="#4a6a7c")),
         legend=dict(bgcolor="rgba(0,0,0,.45)", bordercolor="rgba(255,255,255,.08)",
                     borderwidth=1),
@@ -382,19 +425,19 @@ with tab_dash:
     monthly_df["period"] = monthly_df["date"].dt.to_period("M")
     monthly_gb = monthly_df.groupby("period")["price"].mean().reset_index()
     monthly_gb["label"] = monthly_gb["period"].astype(str)
-    monthly_gb["avg"]   = monthly_gb["price"] * multiplier
+    monthly_gb["avg"]   = monthly_gb["price"].apply(lambda p: _to_disp(p * multiplier))
     bar_fig = go.Figure(go.Bar(
         x=monthly_gb["label"], y=monthly_gb["avg"],
         marker=dict(color=monthly_gb["avg"],
                     colorscale=[[0,"#51cf66"],[0.5,"#ffd43b"],[1,"#ff6b6b"]],
                     showscale=False),
-        hovertemplate="<b>%{x}</b><br>Avg: $%{y:.3f}/gal<extra></extra>"))
+        hovertemplate=f"<b>%{{x}}</b><br>Avg: %{{y:.3f}} {_UNIT}<extra></extra>"))
     bar_fig.update_layout(
         paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
         font=dict(color="#8ab4cc"),
         xaxis=dict(tickfont=dict(color="#4a6a7c"), tickangle=-45,
                    gridcolor="rgba(0,0,0,0)"),
-        yaxis=dict(gridcolor="rgba(255,255,255,.04)", tickprefix="$",
+        yaxis=dict(gridcolor="rgba(255,255,255,.04)", tickprefix=_yaxis_prefix,
                    tickfont=dict(color="#4a6a7c")),
         margin=dict(l=10,r=10,t=10,b=60), height=280)
     st.plotly_chart(bar_fig, use_container_width=True)
@@ -575,13 +618,13 @@ with tab_analysis:
         st.markdown('<div class="sh">🛢️ Gas vs WTI Crude (last 90 days)</div>',
                     unsafe_allow_html=True)
         oil_df = city_df.tail(90).copy()
-        oil_df["price_typed"] = oil_df["price"] * multiplier
+        oil_df["price_disp"] = oil_df["price"].apply(lambda p: _to_disp(p * multiplier))
         fig_oil = go.Figure()
         fig_oil.add_trace(go.Scatter(
-            x=oil_df["date"], y=oil_df["price_typed"],
-            name="Gas ($/gal)", yaxis="y1",
+            x=oil_df["date"], y=oil_df["price_disp"],
+            name=f"Gas ({_UNIT})", yaxis="y1",
             line=dict(color="#74b9ff", width=2),
-            hovertemplate="%{x|%b %d}: $%{y:.3f}<extra>Gas</extra>"))
+            hovertemplate=f"%{{x|%b %d}}: %{{y:.3f}} {_UNIT}<extra>Gas</extra>"))
         fig_oil.add_trace(go.Scatter(
             x=oil_df["date"], y=oil_df["crude_oil"],
             name="WTI ($/bbl)", yaxis="y2",
@@ -590,7 +633,7 @@ with tab_analysis:
         fig_oil.update_layout(
             paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
             font=dict(color="#8ab4cc"),
-            yaxis=dict(title="Gas ($/gal)", tickprefix="$",
+            yaxis=dict(title=f"Gas ({_UNIT})", tickprefix=_yaxis_prefix,
                        gridcolor="rgba(255,255,255,.04)",
                        tickfont=dict(color="#4a6a7c")),
             yaxis2=dict(title="WTI ($/bbl)", tickprefix="$",
@@ -605,7 +648,7 @@ with tab_analysis:
         st.markdown('<div class="sh">📆 Average by Day of Week</div>',
                     unsafe_allow_html=True)
         dow_df = city_df.copy()
-        dow_df["price_typed"] = dow_df["price"] * multiplier
+        dow_df["price_typed"] = dow_df["price"].apply(lambda p: _to_disp(p * multiplier))
         dow_df["dow"] = dow_df["date"].dt.day_name()
         dow_order = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"]
         dow_avg = dow_df.groupby("dow")["price_typed"].mean().reindex(dow_order)
@@ -618,7 +661,7 @@ with tab_analysis:
         fig_dow.update_layout(
             paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
             font=dict(color="#8ab4cc"),
-            yaxis=dict(tickprefix="$", gridcolor="rgba(255,255,255,.04)",
+            yaxis=dict(tickprefix=_yaxis_prefix, gridcolor="rgba(255,255,255,.04)",
                        tickfont=dict(color="#4a6a7c")),
             xaxis=dict(tickfont=dict(color="#4a6a7c")),
             margin=dict(l=10,r=10,t=10,b=10), height=300)
@@ -627,7 +670,7 @@ with tab_analysis:
     # Year-over-year
     st.markdown('<div class="sh">📅 Year-over-Year Comparison</div>', unsafe_allow_html=True)
     yoy_df = city_df.copy()
-    yoy_df["price_typed"] = yoy_df["price"] * multiplier
+    yoy_df["price_typed"] = yoy_df["price"].apply(lambda p: _to_disp(p * multiplier))
     yoy_df["year"] = yoy_df["date"].dt.year
     yoy_df["doy"]  = yoy_df["date"].dt.dayofyear
     colors_yoy = {2022:"#a29bfe",2023:"#ffeaa7",2024:"#74b9ff",2025:"#fd79a8",2026:"#55efc4"}
@@ -643,8 +686,8 @@ with tab_analysis:
         font=dict(color="#8ab4cc"),
         xaxis=dict(title="Day of Year", gridcolor="rgba(255,255,255,.04)",
                    tickfont=dict(color="#4a6a7c")),
-        yaxis=dict(tickprefix="$", gridcolor="rgba(255,255,255,.04)",
-                   title="Price ($/gal)", tickfont=dict(color="#4a6a7c")),
+        yaxis=dict(tickprefix=_yaxis_prefix, gridcolor="rgba(255,255,255,.04)",
+                   title=f"Price ({_UNIT})", tickfont=dict(color="#4a6a7c")),
         legend=dict(bgcolor="rgba(0,0,0,.4)", title="Year"),
         hovermode="x unified",
         margin=dict(l=10,r=10,t=10,b=10), height=320)
@@ -653,7 +696,7 @@ with tab_analysis:
     # Seasonal box
     st.markdown('<div class="sh">📦 Price Distribution by Month</div>', unsafe_allow_html=True)
     sea_df = city_df.copy()
-    sea_df["price_typed"]  = sea_df["price"] * multiplier
+    sea_df["price_typed"]  = sea_df["price"].apply(lambda p: _to_disp(p * multiplier))
     sea_df["month_name"]   = sea_df["date"].dt.strftime("%b")
     month_order = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
     box_fig = go.Figure()
@@ -668,7 +711,7 @@ with tab_analysis:
     box_fig.update_layout(
         paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
         font=dict(color="#8ab4cc"),
-        yaxis=dict(tickprefix="$", gridcolor="rgba(255,255,255,.04)",
+        yaxis=dict(tickprefix=_yaxis_prefix, gridcolor="rgba(255,255,255,.04)",
                    tickfont=dict(color="#4a6a7c")),
         xaxis=dict(tickfont=dict(color="#4a6a7c")),
         margin=dict(l=10,r=10,t=10,b=10), height=300)
@@ -682,62 +725,78 @@ with tab_calc:
     st.markdown('<div class="sh">⛽ Fill-Up Cost Calculator</div>', unsafe_allow_html=True)
     cc1, cc2 = st.columns(2)
     with cc1:
-        tank_size    = st.number_input("Tank size (gallons)", 5.0, 50.0, 15.0, 0.5)
-        tank_level   = st.slider("Current tank level (%)", 0, 100, 25)
-        gallons_need = tank_size * (1 - tank_level/100)
+        if _is_canadian:
+            tank_size_l  = st.number_input("Tank size (litres)", 20.0, 120.0, 55.0, 1.0)
+            tank_level   = st.slider("Current tank level (%)", 0, 100, 25)
+            litres_need  = tank_size_l * (1 - tank_level/100)
+            gallons_need = litres_need / _LITRES_PER_GAL  # for internal calc
+        else:
+            tank_size    = st.number_input("Tank size (gallons)", 5.0, 50.0, 15.0, 0.5)
+            tank_level   = st.slider("Current tank level (%)", 0, 100, 25)
+            gallons_need = tank_size * (1 - tank_level/100)
+            litres_need  = gallons_need * _LITRES_PER_GAL
     with cc2:
-        use_tmrw   = st.checkbox("Use tomorrow's predicted price")
-        price_used = tomorrow_p if use_tmrw else today_p
-        lbl_used   = "Tomorrow's forecast" if use_tmrw else "Today's price"
-        total_cost = gallons_need * price_used
-        savings    = gallons_need * (today_p - tomorrow_p)
+        use_tmrw    = st.checkbox("Use tomorrow's predicted price")
+        price_usd   = tomorrow_p if use_tmrw else today_p
+        price_d_val = tomorrow_disp if use_tmrw else today_disp
+        lbl_used    = "Tomorrow's forecast" if use_tmrw else "Today's price"
+        total_cost  = gallons_need * price_usd   # internally USD
+        total_disp_val = total_cost * (_CAD_PER_USD if _is_canadian else 1.0)
+        savings_usd    = gallons_need * (today_p - tomorrow_p)
+        savings_disp   = savings_usd  * (_CAD_PER_USD if _is_canadian else 1.0)
+        vol_str     = f"{litres_need:.1f} L" if _is_canadian else f"{gallons_need:.1f} gal"
+        curr_sym    = "C$" if _is_canadian else "$"
 
     st.markdown(
         f'<div class="calc-result">'
-        f'<div class="kpi-label">{lbl_used}: ${price_used:.3f}/gal · {gallons_need:.1f} gal needed</div>'
-        f'<div class="calc-big">${total_cost:.2f}</div>'
+        f'<div class="kpi-label">{lbl_used}: {price_d_val:.3f} {_UNIT} · {vol_str} needed</div>'
+        f'<div class="calc-big">{curr_sym}{total_disp_val:.2f}</div>'
         f'<div style="color:#5d7d90;font-size:.9em;margin-top:8px">'
         f'Fill-up cost · <b>{selected}</b> · <b>{gas_type}</b></div>'
         f'</div>', unsafe_allow_html=True)
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    if abs(savings) > 0.01:
-        if savings > 0:
+    if abs(savings_disp) > 0.01:
+        if savings_disp > 0:
             st.markdown(
                 f'<div class="alert-green">💡 Waiting until tomorrow could save '
-                f'<b>${savings:.2f}</b> (price predicted ▼ {tomorrow_chg:+.3f}/gal).</div>',
+                f'<b>{curr_sym}{savings_disp:.2f}</b> (price predicted ▼ {abs(tomorrow_chg_disp):.3f} {_UNIT}).</div>',
                 unsafe_allow_html=True)
         else:
             st.markdown(
                 f'<div class="alert-red">⚠️ Fill up today — tomorrow price rises '
-                f'{tomorrow_chg:+.3f}/gal (extra cost ${abs(savings):.2f}).</div>',
+                f'{tomorrow_chg_disp:+.3f} {_UNIT} (extra cost {curr_sym}{abs(savings_disp):.2f}).</div>',
                 unsafe_allow_html=True)
 
-    # Fill-up cost across all cities
+    # Fill-up cost across all cities (always in local currency)
     st.markdown('<div class="sh">🗺️ Same Fill-Up Cost — All Cities</div>',
                 unsafe_allow_html=True)
     fill_df = all_fc[["city","today_typed"]].copy()
-    fill_df["fill_cost"] = fill_df["today_typed"] * gallons_need
-    fill_df = fill_df.sort_values("fill_cost")
+    # For chart use USD fill cost for consistent comparison, label with $ or C$
+    fill_df["fill_cost_usd"] = fill_df["today_typed"] * gallons_need
+    fill_df["is_ca"] = fill_df["city"].str.endswith((" ON"," BC"," AB"," QC"," MB"))
+    fill_df["fill_cost_disp"] = fill_df.apply(
+        lambda r: r["fill_cost_usd"] * _CAD_PER_USD if r["is_ca"] else r["fill_cost_usd"], axis=1)
+    fill_df = fill_df.sort_values("fill_cost_disp")
     fill_fig = go.Figure(go.Bar(
-        x=fill_df["city"], y=fill_df["fill_cost"],
-        marker=dict(color=fill_df["fill_cost"],
+        x=fill_df["city"], y=fill_df["fill_cost_disp"],
+        marker=dict(color=fill_df["fill_cost_disp"],
                     colorscale=[[0,"#51cf66"],[0.5,"#ffd43b"],[1,"#ff6b6b"]],
                     showscale=False),
-        text=fill_df["fill_cost"].map("${:.2f}".format),
+        text=fill_df.apply(lambda r: f"{'C$' if r['is_ca'] else '$'}{r['fill_cost_disp']:.2f}", axis=1),
         textposition="outside",
         textfont=dict(color="#8ab4cc", size=9),
-        hovertemplate="<b>%{x}</b><br>Fill-up: $%{y:.2f}<extra></extra>"))
+        hovertemplate="<b>%{x}</b><br>Fill-up: %{text}<extra></extra>"))
     fill_fig.add_hline(
-        y=total_cost, line_dash="dash", line_color="rgba(253,121,168,.6)",
-        annotation_text=f"{selected} (${total_cost:.2f})",
+        y=total_disp_val, line_dash="dash", line_color="rgba(253,121,168,.6)",
+        annotation_text=f"{selected} ({curr_sym}{total_disp_val:.2f})",
         annotation_font_color="rgba(253,121,168,.8)")
     fill_fig.update_layout(
         paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
         font=dict(color="#8ab4cc"),
-        yaxis=dict(tickprefix="$", gridcolor="rgba(255,255,255,.04)",
-                   title="Fill-up cost ($)", tickfont=dict(color="#4a6a7c")),
+        yaxis=dict(gridcolor="rgba(255,255,255,.04)",
+                   title="Fill-up cost (local currency)", tickfont=dict(color="#4a6a7c")),
         xaxis=dict(tickfont=dict(color="#4a6a7c"), tickangle=-45),
         margin=dict(l=10,r=10,t=10,b=130), height=420)
     st.plotly_chart(fill_fig, use_container_width=True)
@@ -748,11 +807,11 @@ with tab_calc:
     with mb1:
         fills_mo = st.slider("Fill-ups per month", 1, 12, 4)
     with mb2:
-        monthly_spend = fills_mo * total_cost
+        monthly_spend = fills_mo * total_disp_val
         st.markdown(
             f'<div class="calc-result" style="padding:16px">'
-            f'<div class="kpi-label">{fills_mo} fill-ups/month at ${price_used:.3f}/gal</div>'
-            f'<div style="font-size:2.2em;font-weight:800;color:#74b9ff">${monthly_spend:.2f}</div>'
+            f'<div class="kpi-label">{fills_mo} fill-ups/month at {price_d_val:.3f} {_UNIT}</div>'
+            f'<div style="font-size:2.2em;font-weight:800;color:#74b9ff">{curr_sym}{monthly_spend:.2f}</div>'
             f'<div style="color:#5d7d90;font-size:.82em">estimated monthly fuel spend</div>'
             f'</div>', unsafe_allow_html=True)
 
