@@ -499,14 +499,19 @@ with tab_dash:
 # TAB 2 – LIVE MAP  (interactive gas station map)
 # ══════════════════════════════════════════════════════════════════════════════
 with tab_map:
+    from src.data_collector import CITIES, usd_gal_to_cad_litre
+
+    # Canadian cities only for the city picker (this map is Canada-focused)
+    ca_cities = sorted([c for c in df["city"].unique() if CITIES.get(c, {}).get("country") == "CA"])
+    def_map_idx = ca_cities.index("Oakville, ON") if "Oakville, ON" in ca_cities else 0
+
     # ── Controls row ──────────────────────────────────────────────────────
     mc1, mc2, mc3 = st.columns([2, 2, 1])
     with mc1:
         map_city = st.selectbox(
-            "📍 Centre map on city",
-            options=sorted(df["city"].unique().tolist()),
-            index=sorted(df["city"].unique().tolist()).index("Oakville, ON")
-                  if "Oakville, ON" in df["city"].unique() else 0,
+            "📍 Centre map on Canadian city",
+            options=ca_cities,
+            index=def_map_idx,
             key="map_city_sel",
         )
     with mc2:
@@ -515,20 +520,19 @@ with tab_map:
         st.markdown("<br>", unsafe_allow_html=True)
         reload_map = st.button("🔄 Reload Map", key="map_reload")
 
-    # City info for centring
-    from src.data_collector import CITIES, usd_gal_to_cad_litre
-    city_info  = CITIES.get(map_city, {})
-    map_lat    = city_info.get("lat", 43.45)
-    map_lon    = city_info.get("lon", -79.68)
-    map_country = city_info.get("country", "US")
+    # City info for centring — always Canadian
+    city_info   = CITIES.get(map_city, {})
+    map_lat     = city_info.get("lat", 43.45)
+    map_lon     = city_info.get("lon", -79.68)
+    map_country = "CA"   # this map is Canada-focused
 
     # Instruction banner
     st.markdown(
-        '<div class="info-pill">🗺️ The map loads real gas stations from '
-        '<b>OpenStreetMap</b> via your browser. '
-        'Click <b>📍 My Location</b> to centre on your current position. '
-        'Zoom in and click any station pin for price details and 7-day forecast. '
-        'Stations auto-reload as you pan.</div>',
+        '<div class="info-pill">🍁 Real gas stations loaded from <b>OpenStreetMap</b> '
+        'via your browser. Prices anchored to live <b>NRCan</b> city averages. '
+        'Click <b>📍 My Location</b> to centre on your position. '
+        'Zoom into any station pin for the live price and 7-day forecast. '
+        'Stations reload automatically as you pan.</div>',
         unsafe_allow_html=True
     )
 
@@ -538,24 +542,27 @@ with tab_map:
         center_lat=map_lat,
         center_lon=map_lon,
         city_prices=city_prices,
-        country=map_country,
+        country="CA",
         zoom=map_zoom,
         height_px=620,
     )
     components.html(map_html, height=680, scrolling=False)
 
-    # ── City rankings table below map (kept for reference) ────────────────
-    st.markdown('<div class="sh">📋 All Cities — Sorted by Today\'s Price</div>',
+    # ── Canadian city rankings table ──────────────────────────────────────
+    st.markdown('<div class="sh">🍁 Canadian Cities — Ranked by Today\'s Price (CAD/L)</div>',
                 unsafe_allow_html=True)
-    _typed_col  = "today_cad_l" if map_country == "CA" else "today_usd"
-    rank_df = all_fc.copy()
-    rank_df = rank_df.sort_values("today_typed")
-    rank_df = rank_df[["city", "state", "today_typed", "tomorrow_typed", "chg", "trend"]]
-    rank_df.columns = ["City", "State", "Today", "Tomorrow", "Δ", "Trend"]
-    rank_df["Today"]    = rank_df["Today"].map("${:.3f}".format)
-    rank_df["Tomorrow"] = rank_df["Tomorrow"].map("${:.3f}".format)
-    rank_df["Δ"]        = rank_df["Δ"].map("{:+.3f}".format)
-    st.dataframe(rank_df.set_index("City"), use_container_width=True, height=320)
+    ca_rank = all_fc[all_fc["city"].isin(ca_cities)].copy()
+    # Convert USD/gal → CAD/L for display
+    _CAD_L = lambda usd: round(usd * 1.36 / 3.785, 3)
+    ca_rank["Today (CAD/L)"]    = ca_rank["today_typed"].apply(_CAD_L)
+    ca_rank["Tomorrow (CAD/L)"] = ca_rank["tomorrow_typed"].apply(_CAD_L)
+    ca_rank["Δ (CAD/L)"]        = (ca_rank["tomorrow_typed"] - ca_rank["today_typed"]).apply(
+                                      lambda x: f"{_CAD_L(x):+.3f}")
+    ca_rank = ca_rank.sort_values("Today (CAD/L)")[["city", "state", "Today (CAD/L)", "Tomorrow (CAD/L)", "Δ (CAD/L)", "trend"]]
+    ca_rank.columns = ["City", "Province", "Today (CAD/L)", "Tomorrow (CAD/L)", "Δ (CAD/L)", "Trend"]
+    ca_rank["Today (CAD/L)"]    = ca_rank["Today (CAD/L)"].map("{:.3f}".format)
+    ca_rank["Tomorrow (CAD/L)"] = ca_rank["Tomorrow (CAD/L)"].map("{:.3f}".format)
+    st.dataframe(ca_rank.set_index("City"), use_container_width=True, height=320)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
