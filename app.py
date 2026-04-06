@@ -11,6 +11,7 @@ import os, sys
 import numpy as np
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 import plotly.graph_objects as go
 import plotly.express as px
 from datetime import datetime, timedelta
@@ -19,6 +20,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from src.data_collector import DataCollector, GAS_TYPES
 from src.predictor import GasPricePredictor
+from src.station_map import build_station_map_html
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Page config
@@ -145,6 +147,35 @@ def _all_forecasts(crude: float) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+@st.cache_data(ttl=600, show_spinner=False)
+def _station_map_prices(crude: float) -> dict:
+    """Build city_prices dict for the station map: city -> {price, lat, lon, country}."""
+    from src.data_collector import CITIES, usd_gal_to_cad_litre
+    groups = {c: g.sort_values("date") for c, g in df.groupby("city")}
+    result = {}
+    for city, cdf in groups.items():
+        city_info = CITIES.get(city, {})
+        country   = city_info.get("country", "US")
+        today_usd = float(cdf["price"].iloc[-1])
+        fc_usd    = predictor.forecast_days(city=city, city_history=cdf,
+                                             crude_price=crude,
+                                             start_date=datetime.now(), days=7)
+        if country == "CA":
+            price   = usd_gal_to_cad_litre(today_usd)
+            fc_disp = [usd_gal_to_cad_litre(p) for p in fc_usd]
+        else:
+            price   = round(today_usd, 3)
+            fc_disp = [round(p, 3) for p in fc_usd]
+        result[city] = {
+            "price":   price,
+            "lat":     city_info.get("lat", float(cdf["lat"].iloc[-1])),
+            "lon":     city_info.get("lon", float(cdf["lon"].iloc[-1])),
+            "country": country,
+            "forecast": fc_disp,
+        }
+    return result
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Sidebar
 # ─────────────────────────────────────────────────────────────────────────────
@@ -189,9 +220,9 @@ with st.sidebar:
                                       4.50, 0.10, "%.2f", disabled=not alert_on)
 
     st.markdown("---")
-    st.markdown('<div class="info-pill">💡 Live <b>WTI crude oil</b> via Yahoo Finance.'
-                ' Gas prices use generated sample data — replace <code>data/prices.csv</code>'
-                ' with EIA or GasBuddy data for production.</div>', unsafe_allow_html=True)
+    st.markdown('<div class="info-pill">💡 Canadian prices from <b>NRCan</b>. '
+                'US prices from <b>AAA</b>. Crude oil (<b>WTI</b>) via Yahoo Finance.'
+                ' Data refreshes every 12 hours.</div>', unsafe_allow_html=True)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -465,93 +496,66 @@ with tab_dash:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# TAB 2 – LIVE MAP
+# TAB 2 – LIVE MAP  (interactive gas station map)
 # ══════════════════════════════════════════════════════════════════════════════
 with tab_map:
-    mc1, mc2 = st.columns([2,1])
+    # ── Controls row ──────────────────────────────────────────────────────
+    mc1, mc2, mc3 = st.columns([2, 2, 1])
     with mc1:
-        map_view = st.radio("Show", ["Today's Prices","Tomorrow's Forecast","Price Change"],
-                            horizontal=True, label_visibility="collapsed")
+        map_city = st.selectbox(
+            "📍 Centre map on city",
+            options=sorted(df["city"].unique().tolist()),
+            index=sorted(df["city"].unique().tolist()).index("Oakville, ON")
+                  if "Oakville, ON" in df["city"].unique() else 0,
+            key="map_city_sel",
+        )
     with mc2:
-        map_mode = st.radio("Style", ["Bubble Map","US State Heatmap"],
-                            horizontal=True, label_visibility="collapsed")
+        map_zoom = st.slider("Zoom level", 11, 17, 13, key="map_zoom_sl")
+    with mc3:
+        st.markdown("<br>", unsafe_allow_html=True)
+        reload_map = st.button("🔄 Reload Map", key="map_reload")
 
-    if map_view == "Today's Prices":
-        mcol, mtitle = "today_typed", f"Today's {gas_type} Prices ($/gal)"
-        cscale = [[0,"#51cf66"],[0.45,"#ffd43b"],[1,"#ff6b6b"]]
-    elif map_view == "Tomorrow's Forecast":
-        mcol, mtitle = "tomorrow_typed", f"Tomorrow's Predicted {gas_type} ($/gal)"
-        cscale = [[0,"#51cf66"],[0.45,"#ffd43b"],[1,"#fd79a8"]]
-    else:
-        mcol, mtitle = "chg", "Predicted Price Change ($/gal)"
-        cscale = [[0,"#51cf66"],[0.5,"#ffeaa7"],[1,"#ff6b6b"]]
+    # City info for centring
+    from src.data_collector import CITIES, usd_gal_to_cad_litre
+    city_info  = CITIES.get(map_city, {})
+    map_lat    = city_info.get("lat", 43.45)
+    map_lon    = city_info.get("lon", -79.68)
+    map_country = city_info.get("country", "US")
 
-    if map_mode == "Bubble Map":
-        plot_df = all_fc.copy()
-        plot_df["bubble_size"] = plot_df[mcol].clip(lower=0.01)
-        map_fig = px.scatter_map(
-            plot_df, lat="lat", lon="lon",
-            color=mcol, size="bubble_size",
-            hover_name="city",
-            hover_data={"today_typed":":.3f","tomorrow_typed":":.3f",
-                        "chg":":.3f","state":True,
-                        "lat":False,"lon":False,"bubble_size":False},
-            color_continuous_scale=cscale,
-            size_max=40, zoom=2.4,
-            center={"lat":47.0,"lon":-93.0},
-            map_style="open-street-map",
-            labels={"today_typed":"Today","tomorrow_typed":"Tomorrow",
-                    "chg":"Δ Price","state":"State"})
-        map_fig.update_traces(
-            hovertemplate=(
-                "<b>%{hovertext}</b><br>"
-                "Today: $%{customdata[0]:.3f}<br>"
-                "Tomorrow: $%{customdata[1]:.3f}<br>"
-                "Change: %{customdata[2]:+.3f}<br>"
-                "State: %{customdata[3]}<extra></extra>"),
-            marker=dict(opacity=0.88))
-        map_fig.update_layout(
-            paper_bgcolor="rgba(0,0,0,0)",
-            title=mtitle, title_font=dict(color="#8ab4cc", size=14),
-            margin=dict(l=0,r=0,t=36,b=0), height=560,
-            coloraxis_colorbar=dict(
-                tickprefix="$", title="$/gal",
-                titlefont=dict(color="#8ab4cc"),
-                tickfont=dict(color="#8ab4cc")))
-    else:
-        state_avg = (all_fc.groupby("state")[mcol]
-                     .mean().reset_index().rename(columns={mcol:"value"}))
-        map_fig = px.choropleth(
-            state_avg, locations="state", locationmode="USA-states",
-            color="value", scope="usa",
-            color_continuous_scale=cscale,
-            title=mtitle,
-            labels={"value":"$/gal"},
-            hover_data={"value":":.3f"})
-        map_fig.update_layout(
-            paper_bgcolor="rgba(0,0,0,0)",
-            geo=dict(bgcolor="rgba(0,0,0,0)",
-                     landcolor="#1a2b3d", subunitcolor="#2d4a5c",
-                     showlakes=True, lakecolor="#0d1e33"),
-            title_font=dict(color="#8ab4cc", size=14),
-            margin=dict(l=0,r=0,t=36,b=0), height=560,
-            coloraxis_colorbar=dict(
-                tickprefix="$", title="$/gal",
-                titlefont=dict(color="#8ab4cc"),
-                tickfont=dict(color="#8ab4cc")))
+    # Instruction banner
+    st.markdown(
+        '<div class="info-pill">🗺️ The map loads real gas stations from '
+        '<b>OpenStreetMap</b> via your browser. '
+        'Click <b>📍 My Location</b> to centre on your current position. '
+        'Zoom in and click any station pin for price details and 7-day forecast. '
+        'Stations auto-reload as you pan.</div>',
+        unsafe_allow_html=True
+    )
 
-    st.plotly_chart(map_fig, use_container_width=True)
+    # Build city_prices dict and render the Leaflet map
+    city_prices = _station_map_prices(crude)
+    map_html    = build_station_map_html(
+        center_lat=map_lat,
+        center_lon=map_lon,
+        city_prices=city_prices,
+        country=map_country,
+        zoom=map_zoom,
+        height_px=620,
+    )
+    components.html(map_html, height=680, scrolling=False)
 
-    # Ranked table
-    rank_df = all_fc[["city","state","today_typed","tomorrow_typed","chg","trend"]].copy()
-    rank_df = rank_df.sort_values("today_typed")
-    rank_df.columns = ["City","State","Today ($/gal)","Tomorrow ($/gal)","Δ","Trend"]
-    rank_df["Today ($/gal)"]    = rank_df["Today ($/gal)"].map("${:.3f}".format)
-    rank_df["Tomorrow ($/gal)"] = rank_df["Tomorrow ($/gal)"].map("${:.3f}".format)
-    rank_df["Δ"] = rank_df["Δ"].map("{:+.3f}".format)
-    st.markdown('<div class="sh">📋 All Cities — Ranked Cheapest to Most Expensive</div>',
+    # ── City rankings table below map (kept for reference) ────────────────
+    st.markdown('<div class="sh">📋 All Cities — Sorted by Today\'s Price</div>',
                 unsafe_allow_html=True)
-    st.dataframe(rank_df.set_index("City"), use_container_width=True, height=360)
+    _typed_col  = "today_cad_l" if map_country == "CA" else "today_usd"
+    rank_df = all_fc.copy()
+    rank_df = rank_df.sort_values("today_typed")
+    rank_df = rank_df[["city", "state", "today_typed", "tomorrow_typed", "chg", "trend"]]
+    rank_df.columns = ["City", "State", "Today", "Tomorrow", "Δ", "Trend"]
+    rank_df["Today"]    = rank_df["Today"].map("${:.3f}".format)
+    rank_df["Tomorrow"] = rank_df["Tomorrow"].map("${:.3f}".format)
+    rank_df["Δ"]        = rank_df["Δ"].map("{:+.3f}".format)
+    st.dataframe(rank_df.set_index("City"), use_container_width=True, height=320)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
