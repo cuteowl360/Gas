@@ -11,10 +11,17 @@ import pandas as pd
 # Ordered city list used for deterministic label encoding.
 # Must stay in sync with CITIES in data_collector.py.
 CITY_LIST = sorted([
-    "Atlanta, GA", "Chicago, IL", "Dallas, TX", "Denver, CO",
-    "Houston, TX", "Los Angeles, CA", "Miami, FL", "Minneapolis, MN",
-    "Nashville, TN", "New York, NY", "Phoenix, AZ", "Portland, OR",
-    "San Diego, CA", "San Francisco, CA", "Seattle, WA",
+    "Albuquerque, NM", "Anchorage, AK", "Atlanta, GA", "Austin, TX",
+    "Baltimore, MD", "Boise, ID", "Boston, MA", "Charlotte, NC",
+    "Chicago, IL", "Columbus, OH", "Dallas, TX", "Denver, CO",
+    "Detroit, MI", "Honolulu, HI", "Houston, TX", "Indianapolis, IN",
+    "Kansas City, MO", "Las Vegas, NV", "Los Angeles, CA", "Miami, FL",
+    "Minneapolis, MN", "Nashville, TN", "New Orleans, LA", "New York, NY",
+    "Oklahoma City, OK", "Orlando, FL", "Philadelphia, PA", "Phoenix, AZ",
+    "Pittsburgh, PA", "Portland, OR", "Raleigh, NC", "Sacramento, CA",
+    "Salt Lake City, UT", "San Antonio, TX", "San Diego, CA", "San Francisco, CA",
+    "Seattle, WA", "St. Louis, MO", "Tucson, AZ", "Virginia Beach, VA",
+    "Washington, DC",
 ])
 
 
