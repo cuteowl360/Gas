@@ -169,6 +169,39 @@ def build_station_map_html(
     display:inline-block; width:12px; height:12px;
     border-radius:50%; margin-right:6px; vertical-align:middle;
   }}
+  /* ── Search bar ── */
+  #search-bar {{
+    display:flex; align-items:center; gap:8px; padding:7px 12px;
+    background:rgba(13,30,51,.98); border-bottom:1px solid #1e3a55;
+  }}
+  #search-input {{
+    flex:1; background:#112233; color:#dde8f0;
+    border:1px solid #2d5a7c; border-radius:8px;
+    padding:7px 12px; font-size:.88em; font-family:sans-serif;
+    outline:none;
+  }}
+  #search-input::placeholder {{ color:#4a6a7c; }}
+  #search-input:focus {{ border-color:#74b9ff; background:#0d2a44; }}
+  #search-btn {{
+    background:#1e4a6c; color:#74b9ff; border:1px solid #2d5a7c;
+    border-radius:8px; padding:7px 14px; cursor:pointer;
+    font-size:.88em; font-family:sans-serif; white-space:nowrap;
+  }}
+  #search-btn:hover {{ background:#2d5a7c; }}
+  #search-results {{
+    position:absolute; top:80px; left:12px; right:12px; z-index:9999;
+    background:#0d2a44; border:1px solid #2d5a7c; border-radius:8px;
+    overflow:hidden; box-shadow:0 8px 24px rgba(0,0,0,.6);
+    max-height:220px; overflow-y:auto;
+  }}
+  .search-result-item {{
+    padding:9px 14px; color:#dde8f0; font-size:.84em;
+    font-family:sans-serif; cursor:pointer; border-bottom:1px solid #1e3a55;
+  }}
+  .search-result-item:last-child {{ border-bottom:none; }}
+  .search-result-item:hover {{ background:#1e4a6c; color:#74b9ff; }}
+  .search-result-name {{ font-weight:600; }}
+  .search-result-detail {{ color:#6a8fa8; font-size:.85em; margin-top:1px; }}
   .leaflet-popup-content-wrapper {{
     background:#0d2a44; border:1px solid #2d5a7c; border-radius:12px;
     color:#dde8f0; box-shadow:0 8px 24px rgba(0,0,0,.5);
@@ -195,6 +228,11 @@ def build_station_map_html(
 </style>
 </head>
 <body>
+<div id="search-bar">
+  <input id="search-input" type="text" placeholder="Search an address, road, or place..." autocomplete="off"/>
+  <button id="search-btn">Search</button>
+</div>
+<div id="search-results" style="display:none"></div>
 <div id="controls">
   <button id="locate-btn">📍 My Location</button>
   <label>Radius:&nbsp;<input type="range" id="radius-slider" min="500" max="10000" value="3000" step="500"/>
@@ -369,6 +407,82 @@ document.getElementById('locate-btn').addEventListener('click', () => {{
   }}, () => {{
     status.textContent = '⚠️ Location access denied. Pan the map manually.';
   }});
+}});
+
+// ── Address search (Nominatim / OpenStreetMap) ────────────────────────────
+let searchMarker = null;
+let searchTimeout  = null;
+
+function clearResults() {{
+  const r = document.getElementById('search-results');
+  r.style.display = 'none';
+  r.innerHTML = '';
+}}
+
+function handleSelect(lat, lon, displayName) {{
+  clearResults();
+  document.getElementById('search-input').value = displayName;
+  status.textContent = 'Stations near: ' + displayName.split(',')[0];
+  const pos = [parseFloat(lat), parseFloat(lon)];
+  map.setView(pos, 14);
+  if (searchMarker) map.removeLayer(searchMarker);
+  searchMarker = L.marker(pos, {{
+    icon: L.divIcon({{
+      html: '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="32" viewBox="0 0 24 32">'
+          + '<ellipse cx="12" cy="30" rx="5" ry="2" fill="rgba(0,0,0,.25)"/>'
+          + '<path d="M12 0C7.6 0 4 3.6 4 8c0 6 8 22 8 22s8-16 8-22c0-4.4-3.6-8-8-8z" fill="#e74c3c"/>'
+          + '<circle cx="12" cy="8" r="3" fill="#fff"/>'
+          + '</svg>',
+      className: '', iconSize: [24,32], iconAnchor: [12,32]
+    }})
+  }}).bindPopup('<b>📍 ' + displayName.split(',')[0] + '</b>').addTo(map).openPopup();
+  renderStations(pos[0], pos[1], parseInt(slider.value));
+}}
+
+function searchAddress() {{
+  const q = document.getElementById('search-input').value.trim();
+  if (!q) return;
+  status.textContent = 'Searching…';
+  const url = 'https://nominatim.openstreetmap.org/search?q='
+            + encodeURIComponent(q)
+            + '&format=json&limit=5&countrycodes=ca';
+  fetch(url, {{headers: {{'Accept-Language': 'en', 'User-Agent': 'GasWatch/1.0 (gaswatch.app)'}} }})
+    .then(r => r.json())
+    .then(data => {{
+      if (!data.length) {{
+        status.textContent = 'No results found for: ' + q;
+        clearResults();
+        return;
+      }}
+      if (data.length === 1) {{ handleSelect(data[0].lat, data[0].lon, data[0].display_name); return; }}
+      const box = document.getElementById('search-results');
+      box.innerHTML = '';
+      data.forEach(item => {{
+        const div = document.createElement('div');
+        div.className = 'search-result-item';
+        const parts = item.display_name.split(', ');
+        div.innerHTML = '<div class="search-result-name">' + parts[0] + '</div>'
+                      + '<div class="search-result-detail">' + parts.slice(1,3).join(', ') + '</div>';
+        div.addEventListener('click', () => handleSelect(item.lat, item.lon, item.display_name));
+        box.appendChild(div);
+      }});
+      box.style.display = 'block';
+      status.textContent = data.length + ' results found';
+    }})
+    .catch(() => {{ status.textContent = 'Search failed — check your internet connection.'; }});
+}}
+
+document.getElementById('search-btn').addEventListener('click', () => {{ clearResults(); searchAddress(); }});
+document.getElementById('search-input').addEventListener('keydown', e => {{
+  if (e.key === 'Enter') {{ clearResults(); searchAddress(); }}
+  if (e.key === 'Escape') clearResults();
+}});
+document.getElementById('search-input').addEventListener('input', () => {{
+  clearTimeout(searchTimeout);
+  searchTimeout = setTimeout(searchAddress, 600);
+}});
+document.addEventListener('click', e => {{
+  if (!e.target.closest('#search-bar') && !e.target.closest('#search-results')) clearResults();
 }});
 
 // ── Initial render ────────────────────────────────────────────────────────
