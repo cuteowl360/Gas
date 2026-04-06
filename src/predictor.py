@@ -35,7 +35,7 @@ class GasPricePredictor:
         feat_df = create_features(df).dropna(subset=FEATURE_COLS + ["price"])
 
         # Use only the most recent 365 days per city to keep training fast
-        feat_df = (feat_df.sort_values("date")
+        feat_df = (feat_df.sort_values(["city", "date"])
                           .groupby("city")
                           .tail(365)
                           .reset_index(drop=True))
@@ -141,7 +141,14 @@ class GasPricePredictor:
                 "price_diff_7": lag(1) - lag(7),
             }
 
+            # Model predicts absolute price; clamp each step's move to a
+            # realistic maximum to prevent runaway drift on weekly-interpolated
+            # NRCan data.  ±0.05 USD/gal per day = ±0.018 CAD/L – generous
+            # enough to capture real market moves but stops oscillation.
+            _MAX_DAILY_STEP = 0.05  # USD/gal
             pred = self.predict(features)
+            current = lag(1)
+            pred = float(np.clip(pred, current - _MAX_DAILY_STEP, current + _MAX_DAILY_STEP))
             pred = float(np.clip(pred, 1.50, 9.00))
             predictions.append(round(pred, 3))
             hist_prices.append(pred)   # feed prediction back as next lag
