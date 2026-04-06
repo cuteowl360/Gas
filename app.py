@@ -153,7 +153,7 @@ with st.sidebar:
     st.markdown("*Gas Price Forecasts · ML-Powered*\n\n---")
 
     cities = sorted(df["city"].unique().tolist())
-    def_idx = cities.index("Los Angeles, CA") if "Los Angeles, CA" in cities else 0
+    def_idx = cities.index("Oakville, ON") if "Oakville, ON" in cities else 0
     selected = st.selectbox("📍 City", cities, index=def_idx)
 
     gas_type   = st.selectbox("⛽ Gas Type", list(GAS_TYPES.keys()), index=0)
@@ -190,7 +190,7 @@ with st.sidebar:
 st.markdown(
     '<div class="app-header">'
     '<div class="app-title">⛽ GasWatch</div>'
-    '<div class="app-sub">Gas Price Prediction Engine · United States · ML-Powered</div>'
+    '<div class="app-sub">Gas Price Prediction Engine · North America · ML-Powered</div>'
     '</div>', unsafe_allow_html=True)
 
 hl, hr = st.columns([4, 1])
@@ -227,6 +227,12 @@ daily_chg    = today_p   - yesterday_p
 weekly_chg   = today_p   - week_ago_p
 tomorrow_chg = tomorrow_p - today_p
 
+# Canadian city: compute CAD/L equivalent for display
+_is_canadian = (city_df["country"].iloc[-1] == "CA") if "country" in city_df.columns else False
+_CAD_PER_USD  = 1.36
+_LITRES_PER_GAL = 3.785
+def _to_cad_litre(usd_gal): return usd_gal * _CAD_PER_USD / _LITRES_PER_GAL
+
 def _col(d):   return "c-up" if d > 0.015 else ("c-down" if d < -0.015 else "c-flat")
 def _arrow(d): return "▲"   if d > 0.015 else ("▼"     if d < -0.015 else "●")
 
@@ -261,11 +267,20 @@ if alert_on:
 # KPI cards
 # ─────────────────────────────────────────────────────────────────────────────
 k1, k2, k3, k4, k5 = st.columns(5)
+
+# For Canadian cities show "CAD/L" label; for US show "per gallon"
+if _is_canadian:
+    _today_unit = f"{_to_cad_litre(today_p):.3f} CAD/L · " + gas_type
+    _tmrw_unit  = f"{_to_cad_litre(tomorrow_p):.3f} CAD/L forecast"
+else:
+    _today_unit = "per gallon · " + gas_type
+    _tmrw_unit  = "ML · Random Forest"
+
 for col, label, val, sub, unit, cls in [
     (k1, "Today's Price",    f"${today_p:.2f}",
-     f"{_arrow(daily_chg)} {daily_chg:+.3f} vs yesterday", "per gallon · "+gas_type, _col(daily_chg)),
+     f"{_arrow(daily_chg)} {daily_chg:+.3f} vs yesterday", _today_unit, _col(daily_chg)),
     (k2, "Tomorrow Forecast",f"${tomorrow_p:.2f}",
-     f"{_arrow(tomorrow_chg)} {tomorrow_chg:+.3f} projected", "ML · Random Forest", _col(tomorrow_chg)),
+     f"{_arrow(tomorrow_chg)} {tomorrow_chg:+.3f} projected", _tmrw_unit, _col(tomorrow_chg)),
     (k3, "7-Day Change",     f"{_arrow(weekly_chg)} {abs(weekly_chg):.3f}",
      f"{weekly_chg:+.3f} vs last week", "Weekly trend", _col(weekly_chg)),
     (k4, "WTI Crude Oil",    f"${crude:.2f}",
@@ -439,8 +454,8 @@ with tab_map:
                         "chg":":.3f","state":True,
                         "lat":False,"lon":False,"bubble_size":False},
             color_continuous_scale=cscale,
-            size_max=40, zoom=3.1,
-            center={"lat":38.5,"lon":-96},
+            size_max=40, zoom=2.4,
+            center={"lat":47.0,"lon":-93.0},
             mapbox_style="open-street-map",
             labels={"today_typed":"Today","tomorrow_typed":"Tomorrow",
                     "chg":"Δ Price","state":"State"})
@@ -500,7 +515,7 @@ with tab_map:
 # TAB 3 – CITY COMPARE
 # ══════════════════════════════════════════════════════════════════════════════
 with tab_compare:
-    defaults = ["Los Angeles, CA","New York, NY","Houston, TX","Chicago, IL","Miami, FL"]
+    defaults = ["Oakville, ON","Toronto, ON","Vancouver, BC","New York, NY","Los Angeles, CA"]
     defaults = [c for c in defaults if c in cities]
     cmp_cities = st.multiselect("Select cities to compare (up to 8)", cities,
                                 default=defaults[:5], max_selections=8)

@@ -1,10 +1,9 @@
 """
 data_collector.py – GasWatch
-────────────────────────────
 Handles:
-  • WTI crude oil price fetching via yfinance (with fallback)
-  • Realistic sample gas-price data generation for 40 US cities
-  • Loading / caching data to data/prices.csv
+  - WTI crude oil price fetching via yfinance (with fallback)
+  - Realistic sample gas-price data for US + Canadian cities
+  - Loading / caching data to data/prices.csv
 """
 
 import os
@@ -13,62 +12,96 @@ import pandas as pd
 from datetime import datetime, timedelta
 
 # ---------------------------------------------------------------------------
-# City registry  (base price USD/gal regular unleaded ≈ early-2024 average)
-# state: 2-letter abbreviation for choropleth
+# CAD/L <-> USD/gal constants
+# base prices are stored internally as USD/gal for model consistency.
+# Canadian cities have a cad_per_litre field for display.
+# USD/gal = CAD/L x (3.785 L/gal) / (exchange_rate CAD/USD)
+# ---------------------------------------------------------------------------
+CAD_PER_USD   = 1.36          # approximate exchange rate
+LITRES_PER_GAL = 3.785
+
+def cad_litre_to_usd_gal(cad_l: float) -> float:
+    return round(cad_l * LITRES_PER_GAL / CAD_PER_USD, 3)
+
+def usd_gal_to_cad_litre(usd_g: float) -> float:
+    return round(usd_g * CAD_PER_USD / LITRES_PER_GAL, 3)
+
+# ---------------------------------------------------------------------------
+# City registry
+# country: "CA" or "US"
+# state: province/state abbreviation
+# cad_per_litre: only for Canadian cities (for display)
 # ---------------------------------------------------------------------------
 CITIES = {
-    # West Coast / Pacific
-    "Los Angeles, CA":   {"base": 4.50, "lat": 34.05,  "lon": -118.24, "state": "CA"},
-    "San Francisco, CA": {"base": 4.60, "lat": 37.77,  "lon": -122.42, "state": "CA"},
-    "San Diego, CA":     {"base": 4.45, "lat": 32.72,  "lon": -117.16, "state": "CA"},
-    "Sacramento, CA":    {"base": 4.40, "lat": 38.58,  "lon": -121.49, "state": "CA"},
-    "Seattle, WA":       {"base": 4.20, "lat": 47.61,  "lon": -122.33, "state": "WA"},
-    "Portland, OR":      {"base": 4.00, "lat": 45.52,  "lon": -122.68, "state": "OR"},
-    "Honolulu, HI":      {"base": 5.00, "lat": 21.31,  "lon": -157.86, "state": "HI"},
-    "Anchorage, AK":     {"base": 4.30, "lat": 61.22,  "lon": -149.90, "state": "AK"},
+    # ── Ontario (default focus) ──
+    "Oakville, ON":       {"base": cad_litre_to_usd_gal(1.52), "lat": 43.45, "lon":  -79.68, "state": "ON", "country": "CA", "cad_per_litre": 1.52},
+    "Toronto, ON":        {"base": cad_litre_to_usd_gal(1.55), "lat": 43.65, "lon":  -79.38, "state": "ON", "country": "CA", "cad_per_litre": 1.55},
+    "Mississauga, ON":    {"base": cad_litre_to_usd_gal(1.52), "lat": 43.59, "lon":  -79.64, "state": "ON", "country": "CA", "cad_per_litre": 1.52},
+    "Brampton, ON":       {"base": cad_litre_to_usd_gal(1.53), "lat": 43.73, "lon":  -79.76, "state": "ON", "country": "CA", "cad_per_litre": 1.53},
+    "Hamilton, ON":       {"base": cad_litre_to_usd_gal(1.48), "lat": 43.26, "lon":  -79.87, "state": "ON", "country": "CA", "cad_per_litre": 1.48},
+    "London, ON":         {"base": cad_litre_to_usd_gal(1.50), "lat": 42.98, "lon":  -81.24, "state": "ON", "country": "CA", "cad_per_litre": 1.50},
+    "Kitchener, ON":      {"base": cad_litre_to_usd_gal(1.49), "lat": 43.45, "lon":  -80.49, "state": "ON", "country": "CA", "cad_per_litre": 1.49},
+    "Ottawa, ON":         {"base": cad_litre_to_usd_gal(1.50), "lat": 45.42, "lon":  -75.70, "state": "ON", "country": "CA", "cad_per_litre": 1.50},
 
-    # Mountain / Southwest
-    "Phoenix, AZ":       {"base": 3.40, "lat": 33.45,  "lon": -112.07, "state": "AZ"},
-    "Tucson, AZ":        {"base": 3.35, "lat": 32.22,  "lon": -110.97, "state": "AZ"},
-    "Denver, CO":        {"base": 3.50, "lat": 39.74,  "lon": -104.99, "state": "CO"},
-    "Las Vegas, NV":     {"base": 3.80, "lat": 36.17,  "lon": -115.14, "state": "NV"},
-    "Salt Lake City, UT":{"base": 3.55, "lat": 40.76,  "lon": -111.89, "state": "UT"},
-    "Albuquerque, NM":   {"base": 3.20, "lat": 35.08,  "lon": -106.65, "state": "NM"},
-    "Boise, ID":         {"base": 3.70, "lat": 43.62,  "lon": -116.21, "state": "ID"},
+    # ── Other Canadian cities ──
+    "Vancouver, BC":      {"base": cad_litre_to_usd_gal(1.75), "lat": 49.28, "lon": -123.12, "state": "BC", "country": "CA", "cad_per_litre": 1.75},
+    "Calgary, AB":        {"base": cad_litre_to_usd_gal(1.40), "lat": 51.05, "lon": -114.07, "state": "AB", "country": "CA", "cad_per_litre": 1.40},
+    "Edmonton, AB":       {"base": cad_litre_to_usd_gal(1.35), "lat": 53.55, "lon": -113.49, "state": "AB", "country": "CA", "cad_per_litre": 1.35},
+    "Montreal, QC":       {"base": cad_litre_to_usd_gal(1.72), "lat": 45.50, "lon":  -73.57, "state": "QC", "country": "CA", "cad_per_litre": 1.72},
+    "Winnipeg, MB":       {"base": cad_litre_to_usd_gal(1.48), "lat": 49.90, "lon":  -97.14, "state": "MB", "country": "CA", "cad_per_litre": 1.48},
 
-    # South / Texas
-    "Houston, TX":       {"base": 3.00, "lat": 29.76,  "lon":  -95.37, "state": "TX"},
-    "Dallas, TX":        {"base": 3.05, "lat": 32.78,  "lon":  -96.80, "state": "TX"},
-    "San Antonio, TX":   {"base": 2.98, "lat": 29.42,  "lon":  -98.49, "state": "TX"},
-    "Austin, TX":        {"base": 3.02, "lat": 30.27,  "lon":  -97.74, "state": "TX"},
-    "New Orleans, LA":   {"base": 3.10, "lat": 29.95,  "lon":  -90.07, "state": "LA"},
-    "Oklahoma City, OK": {"base": 3.05, "lat": 35.47,  "lon":  -97.52, "state": "OK"},
+    # ── USA: West Coast / Pacific ──
+    "Los Angeles, CA":    {"base": 4.50, "lat": 34.05,  "lon": -118.24, "state": "CA", "country": "US"},
+    "San Francisco, CA":  {"base": 4.60, "lat": 37.77,  "lon": -122.42, "state": "CA", "country": "US"},
+    "San Diego, CA":      {"base": 4.45, "lat": 32.72,  "lon": -117.16, "state": "CA", "country": "US"},
+    "Sacramento, CA":     {"base": 4.40, "lat": 38.58,  "lon": -121.49, "state": "CA", "country": "US"},
+    "Seattle, WA":        {"base": 4.20, "lat": 47.61,  "lon": -122.33, "state": "WA", "country": "US"},
+    "Portland, OR":       {"base": 4.00, "lat": 45.52,  "lon": -122.68, "state": "OR", "country": "US"},
+    "Honolulu, HI":       {"base": 5.00, "lat": 21.31,  "lon": -157.86, "state": "HI", "country": "US"},
+    "Anchorage, AK":      {"base": 4.30, "lat": 61.22,  "lon": -149.90, "state": "AK", "country": "US"},
 
-    # Southeast
-    "Miami, FL":         {"base": 3.60, "lat": 25.77,  "lon":  -80.19, "state": "FL"},
-    "Orlando, FL":       {"base": 3.55, "lat": 28.54,  "lon":  -81.38, "state": "FL"},
-    "Atlanta, GA":       {"base": 3.20, "lat": 33.75,  "lon":  -84.39, "state": "GA"},
-    "Nashville, TN":     {"base": 3.25, "lat": 36.17,  "lon":  -86.78, "state": "TN"},
-    "Charlotte, NC":     {"base": 3.30, "lat": 35.23,  "lon":  -80.84, "state": "NC"},
-    "Raleigh, NC":       {"base": 3.28, "lat": 35.78,  "lon":  -78.64, "state": "NC"},
-    "Virginia Beach, VA":{"base": 3.35, "lat": 36.85,  "lon":  -75.98, "state": "VA"},
+    # ── USA: Mountain / Southwest ──
+    "Phoenix, AZ":        {"base": 3.40, "lat": 33.45,  "lon": -112.07, "state": "AZ", "country": "US"},
+    "Tucson, AZ":         {"base": 3.35, "lat": 32.22,  "lon": -110.97, "state": "AZ", "country": "US"},
+    "Denver, CO":         {"base": 3.50, "lat": 39.74,  "lon": -104.99, "state": "CO", "country": "US"},
+    "Las Vegas, NV":      {"base": 3.80, "lat": 36.17,  "lon": -115.14, "state": "NV", "country": "US"},
+    "Salt Lake City, UT": {"base": 3.55, "lat": 40.76,  "lon": -111.89, "state": "UT", "country": "US"},
+    "Albuquerque, NM":    {"base": 3.20, "lat": 35.08,  "lon": -106.65, "state": "NM", "country": "US"},
+    "Boise, ID":          {"base": 3.70, "lat": 43.62,  "lon": -116.21, "state": "ID", "country": "US"},
 
-    # Midwest
-    "Chicago, IL":       {"base": 3.70, "lat": 41.88,  "lon":  -87.63, "state": "IL"},
-    "Minneapolis, MN":   {"base": 3.55, "lat": 44.98,  "lon":  -93.27, "state": "MN"},
-    "Detroit, MI":       {"base": 3.45, "lat": 42.33,  "lon":  -83.05, "state": "MI"},
-    "Columbus, OH":      {"base": 3.40, "lat": 39.96,  "lon":  -82.99, "state": "OH"},
-    "Indianapolis, IN":  {"base": 3.38, "lat": 39.77,  "lon":  -86.16, "state": "IN"},
-    "Kansas City, MO":   {"base": 3.15, "lat": 39.10,  "lon":  -94.58, "state": "MO"},
-    "St. Louis, MO":     {"base": 3.12, "lat": 38.63,  "lon":  -90.20, "state": "MO"},
+    # ── USA: South / Texas ──
+    "Houston, TX":        {"base": 3.00, "lat": 29.76,  "lon":  -95.37, "state": "TX", "country": "US"},
+    "Dallas, TX":         {"base": 3.05, "lat": 32.78,  "lon":  -96.80, "state": "TX", "country": "US"},
+    "San Antonio, TX":    {"base": 2.98, "lat": 29.42,  "lon":  -98.49, "state": "TX", "country": "US"},
+    "Austin, TX":         {"base": 3.02, "lat": 30.27,  "lon":  -97.74, "state": "TX", "country": "US"},
+    "New Orleans, LA":    {"base": 3.10, "lat": 29.95,  "lon":  -90.07, "state": "LA", "country": "US"},
+    "Oklahoma City, OK":  {"base": 3.05, "lat": 35.47,  "lon":  -97.52, "state": "OK", "country": "US"},
 
-    # Northeast
-    "New York, NY":      {"base": 3.80, "lat": 40.71,  "lon":  -74.01, "state": "NY"},
-    "Philadelphia, PA":  {"base": 3.65, "lat": 39.95,  "lon":  -75.17, "state": "PA"},
-    "Boston, MA":        {"base": 3.75, "lat": 42.36,  "lon":  -71.06, "state": "MA"},
-    "Washington, DC":    {"base": 3.55, "lat": 38.91,  "lon":  -77.04, "state": "DC"},
-    "Baltimore, MD":     {"base": 3.50, "lat": 39.29,  "lon":  -76.61, "state": "MD"},
-    "Pittsburgh, PA":    {"base": 3.60, "lat": 40.44,  "lon":  -79.99, "state": "PA"},
+    # ── USA: Southeast ──
+    "Miami, FL":          {"base": 3.60, "lat": 25.77,  "lon":  -80.19, "state": "FL", "country": "US"},
+    "Orlando, FL":        {"base": 3.55, "lat": 28.54,  "lon":  -81.38, "state": "FL", "country": "US"},
+    "Atlanta, GA":        {"base": 3.20, "lat": 33.75,  "lon":  -84.39, "state": "GA", "country": "US"},
+    "Nashville, TN":      {"base": 3.25, "lat": 36.17,  "lon":  -86.78, "state": "TN", "country": "US"},
+    "Charlotte, NC":      {"base": 3.30, "lat": 35.23,  "lon":  -80.84, "state": "NC", "country": "US"},
+    "Raleigh, NC":        {"base": 3.28, "lat": 35.78,  "lon":  -78.64, "state": "NC", "country": "US"},
+    "Virginia Beach, VA": {"base": 3.35, "lat": 36.85,  "lon":  -75.98, "state": "VA", "country": "US"},
+
+    # ── USA: Midwest ──
+    "Chicago, IL":        {"base": 3.70, "lat": 41.88,  "lon":  -87.63, "state": "IL", "country": "US"},
+    "Minneapolis, MN":    {"base": 3.55, "lat": 44.98,  "lon":  -93.27, "state": "MN", "country": "US"},
+    "Detroit, MI":        {"base": 3.45, "lat": 42.33,  "lon":  -83.05, "state": "MI", "country": "US"},
+    "Columbus, OH":       {"base": 3.40, "lat": 39.96,  "lon":  -82.99, "state": "OH", "country": "US"},
+    "Indianapolis, IN":   {"base": 3.38, "lat": 39.77,  "lon":  -86.16, "state": "IN", "country": "US"},
+    "Kansas City, MO":    {"base": 3.15, "lat": 39.10,  "lon":  -94.58, "state": "MO", "country": "US"},
+    "St. Louis, MO":      {"base": 3.12, "lat": 38.63,  "lon":  -90.20, "state": "MO", "country": "US"},
+
+    # ── USA: Northeast ──
+    "New York, NY":       {"base": 3.80, "lat": 40.71,  "lon":  -74.01, "state": "NY", "country": "US"},
+    "Philadelphia, PA":   {"base": 3.65, "lat": 39.95,  "lon":  -75.17, "state": "PA", "country": "US"},
+    "Boston, MA":         {"base": 3.75, "lat": 42.36,  "lon":  -71.06, "state": "MA", "country": "US"},
+    "Washington, DC":     {"base": 3.55, "lat": 38.91,  "lon":  -77.04, "state": "DC", "country": "US"},
+    "Baltimore, MD":      {"base": 3.50, "lat": 39.29,  "lon":  -76.61, "state": "MD", "country": "US"},
+    "Pittsburgh, PA":     {"base": 3.60, "lat": 40.44,  "lon":  -79.99, "state": "PA", "country": "US"},
 }
 
 # Gas type multipliers (relative to regular)
@@ -166,6 +199,7 @@ class DataCollector:
                     "date":      d,
                     "city":      city,
                     "state":     info["state"],
+                    "country":   info.get("country", "US"),
                     "price":     round(price, 3),
                     "crude_oil": w,
                     "lat":       info["lat"],
