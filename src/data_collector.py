@@ -49,6 +49,91 @@ def cad_litre_to_usd_gal(cad_l: float) -> float:
 def usd_gal_to_cad_litre(usd_g: float) -> float:
     return round(usd_g * CAD_PER_USD / LITRES_PER_GAL, 3)
 
+def usd_litre_to_usd_gal(usd_l: float) -> float:
+    return round(usd_l * LITRES_PER_GAL, 3)
+
+# ── Country metadata (display currency, unit, GlobalPetrolPrices.com slug) ───
+# Each entry: {"currency": ISO code, "sym": display symbol,
+#              "unit": "L" or "gal", "gpp_slug": GPP URL slug or None}
+COUNTRY_META: dict = {
+    "CA": {"currency": "CAD", "sym": "C$",    "unit": "L",   "gpp_slug": None},
+    "US": {"currency": "USD", "sym": "$",     "unit": "gal", "gpp_slug": None},
+    "GB": {"currency": "GBP", "sym": "£",     "unit": "L",   "gpp_slug": "United_Kingdom"},
+    "DE": {"currency": "EUR", "sym": "€",     "unit": "L",   "gpp_slug": "Germany"},
+    "FR": {"currency": "EUR", "sym": "€",     "unit": "L",   "gpp_slug": "France"},
+    "NL": {"currency": "EUR", "sym": "€",     "unit": "L",   "gpp_slug": "Netherlands"},
+    "NO": {"currency": "NOK", "sym": "kr",    "unit": "L",   "gpp_slug": "Norway"},
+    "SE": {"currency": "SEK", "sym": "kr",    "unit": "L",   "gpp_slug": "Sweden"},
+    "CH": {"currency": "CHF", "sym": "Fr",    "unit": "L",   "gpp_slug": "Switzerland"},
+    "ES": {"currency": "EUR", "sym": "€",     "unit": "L",   "gpp_slug": "Spain"},
+    "IT": {"currency": "EUR", "sym": "€",     "unit": "L",   "gpp_slug": "Italy"},
+    "AU": {"currency": "AUD", "sym": "A$",    "unit": "L",   "gpp_slug": "Australia"},
+    "JP": {"currency": "JPY", "sym": "¥",     "unit": "L",   "gpp_slug": "Japan"},
+    "KR": {"currency": "KRW", "sym": "₩",     "unit": "L",   "gpp_slug": "South_Korea"},
+    "SG": {"currency": "SGD", "sym": "S$",    "unit": "L",   "gpp_slug": "Singapore"},
+    "IN": {"currency": "INR", "sym": "₹",     "unit": "L",   "gpp_slug": "India"},
+    "MX": {"currency": "MXN", "sym": "MX$",   "unit": "L",   "gpp_slug": "Mexico"},
+    "BR": {"currency": "BRL", "sym": "R$",    "unit": "L",   "gpp_slug": "Brazil"},
+    "CN": {"currency": "CNY", "sym": "CN¥",   "unit": "L",   "gpp_slug": "China"},
+    "AE": {"currency": "AED", "sym": "AED",   "unit": "L",   "gpp_slug": "United_Arab_Emirates"},
+    "SA": {"currency": "SAR", "sym": "SAR",   "unit": "L",   "gpp_slug": "Saudi_Arabia"},
+    "ZA": {"currency": "ZAR", "sym": "R",     "unit": "L",   "gpp_slug": "South_Africa"},
+}
+
+# ── Fallback FX rates (local currency units per 1 USD, April 2026 approx.) ──
+# Source: standard market rates; updated live at runtime via yfinance
+_FX_FALLBACK: dict = {
+    "CAD": 1.36,  "USD": 1.00,  "GBP": 0.78,  "EUR": 0.87,
+    "AUD": 1.45,  "JPY": 148.0, "KRW": 1340.0,"SGD": 1.34,
+    "CNY": 7.24,  "INR": 84.0,  "BRL": 5.30,  "MXN": 18.0,
+    "NOK": 10.5,  "SEK": 10.4,  "CHF": 0.89,  "AED": 3.67,
+    "SAR": 3.75,  "ZAR": 18.0,
+}
+
+# ── Per-city USD/L price offset relative to the national GPP average ─────────
+CITY_GPP_OFFSET_L: dict = {
+    # UK
+    "Manchester, UK":       -0.020, "Birmingham, UK":        0.000,
+    "Edinburgh, UK":         0.030,
+    # Germany
+    "Munich, Germany":       0.050, "Hamburg, Germany":     -0.020,
+    "Frankfurt, Germany":    0.010,
+    # France
+    "Lyon, France":         -0.030, "Marseille, France":    -0.050,
+    # Netherlands
+    "Rotterdam, Netherlands":-0.030,
+    # Norway
+    "Bergen, Norway":        0.040,
+    # Sweden
+    "Gothenburg, Sweden":    0.020,
+    # Switzerland
+    "Geneva, Switzerland":   0.010,
+    # Spain
+    "Barcelona, Spain":      0.015,
+    # Italy
+    "Milan, Italy":          0.020,
+    # Australia
+    "Melbourne, Australia":  0.020, "Brisbane, Australia":  -0.030,
+    "Perth, Australia":     -0.050,
+    # Japan
+    "Osaka, Japan":         -0.010,
+    # South Korea
+    "Busan, South Korea":    0.010,
+    # India
+    "Delhi, India":         -0.010, "Bangalore, India":     -0.020,
+    # China
+    "Shanghai, China":       0.010, "Guangzhou, China":      0.000,
+    "Shenzhen, China":       0.005,
+    # Mexico
+    "Guadalajara, Mexico":  -0.020, "Monterrey, Mexico":     0.010,
+    # Brazil
+    "Rio de Janeiro, Brazil": 0.020,"Brasília, Brazil":     -0.010,
+    # UAE
+    "Abu Dhabi, UAE":        0.000,
+    # South Africa
+    "Cape Town, South Africa":-0.010,
+}
+
 # ── NRCan location names for Canadian cities ─────────────────────────────────
 # NRCan reports data for: Toronto, Ottawa, Vancouver, Calgary, Edmonton,
 # Winnipeg, Montreal.  GTA proxy cities share Toronto's series ± small offset.
@@ -164,6 +249,97 @@ CITIES = {
     "Washington, DC":     {"base": 3.55, "lat": 38.91,  "lon":  -77.04, "state": "DC", "country": "US"},
     "Baltimore, MD":      {"base": 3.50, "lat": 39.29,  "lon":  -76.61, "state": "MD", "country": "US"},
     "Pittsburgh, PA":     {"base": 3.60, "lat": 40.44,  "lon":  -79.99, "state": "PA", "country": "US"},
+
+    # ── Europe – United Kingdom ──────────────────────────────────────────────
+    "London, UK":         {"base": usd_litre_to_usd_gal(1.81), "lat": 51.51, "lon":  -0.13, "state": "ENG", "country": "GB"},
+    "Manchester, UK":     {"base": usd_litre_to_usd_gal(1.79), "lat": 53.48, "lon":  -2.24, "state": "ENG", "country": "GB"},
+    "Birmingham, UK":     {"base": usd_litre_to_usd_gal(1.81), "lat": 52.49, "lon":  -1.90, "state": "ENG", "country": "GB"},
+    "Edinburgh, UK":      {"base": usd_litre_to_usd_gal(1.84), "lat": 55.95, "lon":  -3.19, "state": "SCO", "country": "GB"},
+
+    # ── Europe – Germany ─────────────────────────────────────────────────────
+    "Berlin, Germany":    {"base": usd_litre_to_usd_gal(2.42), "lat": 52.52, "lon":  13.41, "state": "BE", "country": "DE"},
+    "Munich, Germany":    {"base": usd_litre_to_usd_gal(2.47), "lat": 48.14, "lon":  11.58, "state": "BY", "country": "DE"},
+    "Hamburg, Germany":   {"base": usd_litre_to_usd_gal(2.40), "lat": 53.55, "lon":   9.99, "state": "HH", "country": "DE"},
+    "Frankfurt, Germany": {"base": usd_litre_to_usd_gal(2.43), "lat": 50.11, "lon":   8.68, "state": "HE", "country": "DE"},
+
+    # ── Europe – France ──────────────────────────────────────────────────────
+    "Paris, France":      {"base": usd_litre_to_usd_gal(2.28), "lat": 48.86, "lon":   2.35, "state": "IDF", "country": "FR"},
+    "Lyon, France":       {"base": usd_litre_to_usd_gal(2.25), "lat": 45.75, "lon":   4.84, "state": "ARA", "country": "FR"},
+    "Marseille, France":  {"base": usd_litre_to_usd_gal(2.23), "lat": 43.30, "lon":   5.37, "state": "PAC", "country": "FR"},
+
+    # ── Europe – Netherlands ─────────────────────────────────────────────────
+    "Amsterdam, Netherlands": {"base": usd_litre_to_usd_gal(2.74), "lat": 52.37, "lon":  4.89, "state": "NH", "country": "NL"},
+    "Rotterdam, Netherlands": {"base": usd_litre_to_usd_gal(2.71), "lat": 51.92, "lon":  4.48, "state": "ZH", "country": "NL"},
+
+    # ── Europe – Norway ──────────────────────────────────────────────────────
+    "Oslo, Norway":       {"base": usd_litre_to_usd_gal(2.36), "lat": 59.91, "lon":  10.75, "state": "Oslo", "country": "NO"},
+    "Bergen, Norway":     {"base": usd_litre_to_usd_gal(2.40), "lat": 60.39, "lon":   5.32, "state": "Vestland", "country": "NO"},
+
+    # ── Europe – Sweden ──────────────────────────────────────────────────────
+    "Stockholm, Sweden":  {"base": usd_litre_to_usd_gal(1.92), "lat": 59.33, "lon":  18.07, "state": "Stockholm", "country": "SE"},
+    "Gothenburg, Sweden": {"base": usd_litre_to_usd_gal(1.94), "lat": 57.71, "lon":  11.97, "state": "Vastra_Gotaland", "country": "SE"},
+
+    # ── Europe – Switzerland ──────────────────────────────────────────────────
+    "Zurich, Switzerland":{"base": usd_litre_to_usd_gal(2.10), "lat": 47.38, "lon":   8.54, "state": "ZH", "country": "CH"},
+    "Geneva, Switzerland":{"base": usd_litre_to_usd_gal(2.11), "lat": 46.20, "lon":   6.14, "state": "GE", "country": "CH"},
+
+    # ── Europe – Spain ───────────────────────────────────────────────────────
+    "Madrid, Spain":      {"base": usd_litre_to_usd_gal(1.90), "lat": 40.42, "lon":  -3.70, "state": "MD", "country": "ES"},
+    "Barcelona, Spain":   {"base": usd_litre_to_usd_gal(1.92), "lat": 41.39, "lon":   2.15, "state": "CT", "country": "ES"},
+
+    # ── Europe – Italy ───────────────────────────────────────────────────────
+    "Rome, Italy":        {"base": usd_litre_to_usd_gal(2.05), "lat": 41.90, "lon":  12.50, "state": "RM", "country": "IT"},
+    "Milan, Italy":       {"base": usd_litre_to_usd_gal(2.07), "lat": 45.46, "lon":   9.19, "state": "MI", "country": "IT"},
+
+    # ── Asia-Pacific – Australia ─────────────────────────────────────────────
+    "Sydney, Australia":  {"base": usd_litre_to_usd_gal(1.59), "lat":-33.87, "lon": 151.21, "state": "NSW", "country": "AU"},
+    "Melbourne, Australia":{"base": usd_litre_to_usd_gal(1.61), "lat":-37.81, "lon": 144.96, "state": "VIC", "country": "AU"},
+    "Brisbane, Australia":{"base": usd_litre_to_usd_gal(1.56), "lat":-27.47, "lon": 153.02, "state": "QLD", "country": "AU"},
+    "Perth, Australia":   {"base": usd_litre_to_usd_gal(1.54), "lat":-31.95, "lon": 115.86, "state": "WA",  "country": "AU"},
+
+    # ── Asia-Pacific – Japan ──────────────────────────────────────────────────
+    "Tokyo, Japan":       {"base": usd_litre_to_usd_gal(1.13), "lat": 35.69, "lon": 139.69, "state": "Tokyo", "country": "JP"},
+    "Osaka, Japan":       {"base": usd_litre_to_usd_gal(1.12), "lat": 34.69, "lon": 135.50, "state": "Osaka", "country": "JP"},
+
+    # ── Asia-Pacific – South Korea ────────────────────────────────────────────
+    "Seoul, South Korea": {"base": usd_litre_to_usd_gal(1.52), "lat": 37.57, "lon": 126.98, "state": "Seoul", "country": "KR"},
+    "Busan, South Korea": {"base": usd_litre_to_usd_gal(1.53), "lat": 35.18, "lon": 129.08, "state": "Busan", "country": "KR"},
+
+    # ── Asia-Pacific – Singapore ──────────────────────────────────────────────
+    "Singapore":          {"base": usd_litre_to_usd_gal(2.55), "lat":  1.35, "lon": 103.82, "state": "SG",    "country": "SG"},
+
+    # ── Asia-Pacific – India ──────────────────────────────────────────────────
+    "Mumbai, India":      {"base": usd_litre_to_usd_gal(1.08), "lat": 19.08, "lon":  72.88, "state": "MH", "country": "IN"},
+    "Delhi, India":       {"base": usd_litre_to_usd_gal(1.07), "lat": 28.61, "lon":  77.21, "state": "DL", "country": "IN"},
+    "Bangalore, India":   {"base": usd_litre_to_usd_gal(1.06), "lat": 12.97, "lon":  77.59, "state": "KA", "country": "IN"},
+
+    # ── Asia-Pacific – China ──────────────────────────────────────────────────
+    "Beijing, China":     {"base": usd_litre_to_usd_gal(1.33), "lat": 39.91, "lon": 116.39, "state": "Beijing", "country": "CN"},
+    "Shanghai, China":    {"base": usd_litre_to_usd_gal(1.34), "lat": 31.23, "lon": 121.47, "state": "Shanghai", "country": "CN"},
+    "Guangzhou, China":   {"base": usd_litre_to_usd_gal(1.33), "lat": 23.13, "lon": 113.26, "state": "GD", "country": "CN"},
+    "Shenzhen, China":    {"base": usd_litre_to_usd_gal(1.34), "lat": 22.54, "lon": 114.06, "state": "GD", "country": "CN"},
+
+    # ── Americas – Mexico ──────────────────────────────────────────────────────
+    "Mexico City, Mexico":{"base": usd_litre_to_usd_gal(1.55), "lat": 19.43, "lon": -99.13, "state": "CDMX", "country": "MX"},
+    "Guadalajara, Mexico":{"base": usd_litre_to_usd_gal(1.53), "lat": 20.66, "lon":-103.35, "state": "JAL",  "country": "MX"},
+    "Monterrey, Mexico":  {"base": usd_litre_to_usd_gal(1.56), "lat": 25.69, "lon": -100.32,"state": "NL",   "country": "MX"},
+
+    # ── Americas – Brazil ──────────────────────────────────────────────────────
+    "São Paulo, Brazil":  {"base": usd_litre_to_usd_gal(1.27), "lat":-23.55, "lon": -46.63, "state": "SP", "country": "BR"},
+    "Rio de Janeiro, Brazil":{"base": usd_litre_to_usd_gal(1.29), "lat":-22.91, "lon": -43.17,"state": "RJ","country": "BR"},
+    "Brasília, Brazil":   {"base": usd_litre_to_usd_gal(1.26), "lat":-15.78, "lon": -47.93, "state": "DF", "country": "BR"},
+
+    # ── Middle East – UAE ──────────────────────────────────────────────────────
+    "Dubai, UAE":         {"base": usd_litre_to_usd_gal(0.68), "lat": 25.20, "lon":  55.27, "state": "DXB", "country": "AE"},
+    "Abu Dhabi, UAE":     {"base": usd_litre_to_usd_gal(0.68), "lat": 24.47, "lon":  54.37, "state": "AUH", "country": "AE"},
+
+    # ── Middle East – Saudi Arabia ────────────────────────────────────────────
+    "Riyadh, Saudi Arabia":{"base": usd_litre_to_usd_gal(0.57), "lat": 24.69, "lon":  46.72, "state": "RUH", "country": "SA"},
+    "Jeddah, Saudi Arabia":{"base": usd_litre_to_usd_gal(0.57), "lat": 21.54, "lon":  39.17, "state": "JED", "country": "SA"},
+
+    # ── Africa – South Africa ─────────────────────────────────────────────────
+    "Johannesburg, South Africa":{"base": usd_litre_to_usd_gal(1.02), "lat":-26.20, "lon": 28.04, "state": "GP", "country": "ZA"},
+    "Cape Town, South Africa":   {"base": usd_litre_to_usd_gal(1.01), "lat":-33.93, "lon": 18.42, "state": "WC", "country": "ZA"},
 }
 
 # Gas type multipliers (relative to regular)
@@ -460,6 +636,147 @@ class DataCollector:
 
         return records
 
+    # ──────────────────────────────────────────────────────────────────
+    # Live FX rates
+    # ──────────────────────────────────────────────────────────────────
+    def get_fx_rates(self) -> dict:
+        """Return {currency_code: local_units_per_USD} using yfinance.
+        Falls back to _FX_FALLBACK on any error.  Tickers: EURUSD=X → EUR/USD
+        means 1 EUR = X USD, so local_per_usd = 1 / rate.
+        """
+        pairs = {
+            "GBP": "GBPUSD=X", "EUR": "EURUSD=X", "AUD": "AUDUSD=X",
+            "SGD": "SGDUSD=X", "CHF": "CHFUSD=X",
+        }
+        # High-value divisor pairs (1 USD = X local): use USDXXX=X
+        div_pairs = {
+            "JPY": "USDJPY=X", "KRW": "USDKRW=X", "INR": "USDINR=X",
+            "CNY": "USDCNY=X", "BRL": "USDBRL=X", "MXN": "USDMXN=X",
+            "NOK": "USDNOK=X", "SEK": "USDSEK=X", "ZAR": "USDZAR=X",
+            "CAD": "USDCAD=X",
+        }
+        result = dict(_FX_FALLBACK)  # start with fallback
+        try:
+            import yfinance as yf
+            for cur, ticker in pairs.items():
+                try:
+                    h = yf.Ticker(ticker).history(period="1d")
+                    if not h.empty:
+                        usd_per_local = float(h["Close"].iloc[-1])
+                        if usd_per_local > 0:
+                            result[cur] = round(1.0 / usd_per_local, 4)
+                except Exception:
+                    pass
+            for cur, ticker in div_pairs.items():
+                try:
+                    h = yf.Ticker(ticker).history(period="1d")
+                    if not h.empty:
+                        result[cur] = round(float(h["Close"].iloc[-1]), 4)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        result["USD"] = 1.0  # always exact
+        result["AED"] = 3.6725  # fixed peg
+        result["SAR"] = 3.75    # fixed peg
+        return result
+
+    # ──────────────────────────────────────────────────────────────────
+    # GlobalPetrolPrices.com – international real prices
+    # ──────────────────────────────────────────────────────────────────
+    def fetch_globalpetrolprices_current(self, country_slug: str) -> float | None:
+        """Fetch current national gasoline price in USD/litre from GlobalPetrolPrices.com.
+        Returns USD/litre float or None on failure.
+        Source: https://www.globalpetrolprices.com/{country_slug}/gasoline_prices/
+        """
+        url = f"https://www.globalpetrolprices.com/{country_slug}/gasoline_prices/"
+        try:
+            txt = _get(url, timeout=25).decode("utf-8", errors="replace")
+            # Pattern: "or USD X.XX per liter" (always present on country-specific pages)
+            m = re.search(r'or\s+USD\s+(\d+\.\d+)\s+per\s+lit(?:re|er)', txt, re.IGNORECASE)
+            if m:
+                val = float(m.group(1))
+                if 0.10 <= val <= 6.00:  # sanity check: ~ $0.10–$6/L is the global range
+                    return val
+        except Exception as exc:
+            print(f"  GPP: failed {country_slug}: {exc}")
+        return None
+
+    # ──────────────────────────────────────────────────────────────────
+    # Build international rows (GlobalPetrolPrices.com + WTI scaling)
+    # ──────────────────────────────────────────────────────────────────
+    def _build_intl_rows(self, wti_df: pd.DataFrame) -> list:
+        """Build daily rows for all international cities (non-CA, non-US)
+        using GlobalPetrolPrices.com current national price + WTI backfill."""
+        records = []
+        today = pd.Timestamp(datetime.now().date())
+        start = today - timedelta(days=730)
+        dates = pd.date_range(start, today, freq="D")
+
+        # Identify unique countries needing GPP data
+        intl_cities = {
+            city: info for city, info in CITIES.items()
+            if info.get("country") not in ("CA", "US")
+        }
+        if not intl_cities:
+            return records
+
+        # Build unique country→slug mapping from COUNTRY_META
+        needed_slugs: dict[str, str] = {}
+        for city, info in intl_cities.items():
+            cc = info["country"]
+            slug = COUNTRY_META.get(cc, {}).get("gpp_slug")
+            if slug and cc not in needed_slugs:
+                needed_slugs[cc] = slug
+
+        # Fetch one GPP request per country (cached)
+        gpp_cache: dict[str, float] = {}
+        for cc, slug in needed_slugs.items():
+            print(f"  GPP: fetching {slug}...")
+            result = self.fetch_globalpetrolprices_current(slug)
+            if result is not None:
+                print(f"  GPP: {slug} → USD {result:.3f}/L")
+                gpp_cache[cc] = result
+            else:
+                # Fallback: derive from base price of the first city for that country
+                base_city = next(
+                    (c for c, i in CITIES.items() if i.get("country") == cc), None)
+                if base_city:
+                    gpp_cache[cc] = CITIES[base_city]["base"] / LITRES_PER_GAL
+                    print(f"  GPP: {slug} failed, using base fallback {gpp_cache[cc]:.3f}")
+
+        wti_today = float(wti_df["wti"].iloc[-1]) if not wti_df.empty else 110.0
+
+        for city, info in intl_cities.items():
+            cc = info["country"]
+            current_usd_l = gpp_cache.get(cc, info["base"] / LITRES_PER_GAL)
+            current_usd_gal = current_usd_l * LITRES_PER_GAL
+
+            # Apply city-level offset (USD/L)
+            offset_l = CITY_GPP_OFFSET_L.get(city, 0.0)
+            current_usd_gal += offset_l * LITRES_PER_GAL
+
+            rng = np.random.default_rng(seed=abs(hash(city)) % (2 ** 31))
+
+            for dt in dates:
+                wti_row = wti_df[wti_df["date"] == dt]
+                wti_val = float(wti_row["wti"].iloc[0]) if not wti_row.empty else wti_today
+                scaled  = current_usd_gal * (wti_val / wti_today)
+                noise   = rng.normal(0, 0.005)
+                price   = round(max(0.50, scaled + noise), 3)
+                records.append({
+                    "date":      dt,
+                    "city":      city,
+                    "state":     info["state"],
+                    "country":   cc,
+                    "price":     price,
+                    "crude_oil": round(wti_val, 2),
+                    "lat":       info["lat"],
+                    "lon":       info["lon"],
+                })
+
+        return records
+
     def build_real_data(self) -> pd.DataFrame:
         """Fetch real data from NRCan + AAA and return a combined DataFrame."""
         print("Fetching WTI history...")
@@ -473,7 +790,10 @@ class DataCollector:
         print("Building US city rows (AAA + WTI)...")
         us_rows = self._build_us_rows(wti_df)
 
-        all_rows = ca_rows + us_rows
+        print("Building international city rows (GlobalPetrolPrices.com)...")
+        intl_rows = self._build_intl_rows(wti_df)
+
+        all_rows = ca_rows + us_rows + intl_rows
         if not all_rows:
             raise ValueError("build_real_data: no rows assembled")
 

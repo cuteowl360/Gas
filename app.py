@@ -18,7 +18,7 @@ from datetime import datetime, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from src.data_collector import DataCollector, GAS_TYPES
+from src.data_collector import DataCollector, GAS_TYPES, COUNTRY_META, _FX_FALLBACK
 from src.predictor import GasPricePredictor
 from src.station_map import build_station_map_html
 
@@ -142,15 +142,21 @@ def _all_forecasts(crude: float) -> pd.DataFrame:
         fc = predictor.forecast_days(city=city, city_history=cdf,
                                      crude_price=crude, start_date=datetime.now(), days=1)
         rows.append({"city": city, "state": cdf["state"].iloc[-1],
+                     "country": cdf["country"].iloc[-1] if "country" in cdf.columns else "US",
                      "today": today, "tomorrow": fc[0],
                      "lat": cdf["lat"].iloc[-1], "lon": cdf["lon"].iloc[-1]})
     return pd.DataFrame(rows)
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def _fx_rates() -> dict:
+    return collector.get_fx_rates()
+
+
 @st.cache_data(ttl=600, show_spinner=False)
 def _station_map_prices(crude: float) -> dict:
     """Build city_prices dict for the station map: city -> {price, lat, lon, country}."""
-    from src.data_collector import CITIES, usd_gal_to_cad_litre
+    from src.data_collector import CITIES, usd_gal_to_cad_litre, _FX_FALLBACK, COUNTRY_META
     groups = {c: g.sort_values("date") for c, g in df.groupby("city")}
     result = {}
     for city, cdf in groups.items():
@@ -160,17 +166,24 @@ def _station_map_prices(crude: float) -> dict:
         fc_usd    = predictor.forecast_days(city=city, city_history=cdf,
                                              crude_price=crude,
                                              start_date=datetime.now(), days=7)
-        if country == "CA":
-            price   = usd_gal_to_cad_litre(today_usd)
-            fc_disp = [usd_gal_to_cad_litre(p) for p in fc_usd]
-        else:
+        cmeta = COUNTRY_META.get(country, COUNTRY_META["US"])
+        if country == "US":
             price   = round(today_usd, 3)
             fc_disp = [round(p, 3) for p in fc_usd]
+        else:
+            # Convert USD/gal → local currency/L using fallback FX
+            fx  = _FX_FALLBACK.get(cmeta["currency"], 1.0)
+            def _conv(usd_g): return round(usd_g / 3.785 * fx, 3)
+            price   = _conv(today_usd)
+            fc_disp = [_conv(p) for p in fc_usd]
         result[city] = {
-            "price":   price,
-            "lat":     city_info.get("lat", float(cdf["lat"].iloc[-1])),
-            "lon":     city_info.get("lon", float(cdf["lon"].iloc[-1])),
-            "country": country,
+            "price":    price,
+            "lat":      city_info.get("lat", float(cdf["lat"].iloc[-1])),
+            "lon":      city_info.get("lon", float(cdf["lon"].iloc[-1])),
+            "country":  country,
+            "currency": cmeta["currency"],
+            "sym":      cmeta["sym"],
+            "unit":     cmeta["unit"],
             "forecast": fc_disp,
         }
     return result
@@ -190,19 +203,23 @@ with st.sidebar:
     gas_type   = st.selectbox("⛽ Gas Type", list(GAS_TYPES.keys()), index=0)
     multiplier = GAS_TYPES[gas_type]
 
-    _sb_canadian = (df[df["city"]==selected]["country"].iloc[-1] == "CA") if "country" in df.columns else False
+    _sb_country = (df[df["city"]==selected]["country"].iloc[-1]) if "country" in df.columns else "US"
+    _sb_cmeta = COUNTRY_META.get(_sb_country, COUNTRY_META["US"])
 
     st.markdown("---")
     st.markdown("**✏️ Manual Price Override**")
     use_manual = st.checkbox("Enter today's price manually")
     manual_price = 0.0
     if use_manual:
-        if _sb_canadian:
-            _inp_cad = st.number_input("Today's price (CAD/L)", 0.50, 4.00, 1.52, 0.01, "%.2f")
-            manual_price = _inp_cad * 3.785 / 1.36  # store internally as USD/gal
+        _sb_fx = _FX_FALLBACK.get(_sb_cmeta["currency"], 1.0)
+        if _sb_cmeta["unit"] == "gal":
+            manual_price = st.number_input("Today's price ($/gal)", 0.50, 9.99, 3.50, 0.01, "%.2f")
         else:
-            manual_price = st.number_input("Today's price ($/gal)", 0.50, 9.99,
-                                           3.50, 0.01, "%.2f")
+            _default_local = round(3.50 / 3.785 * _sb_fx, 2)
+            _inp_local = st.number_input(
+                f"Today's price ({_sb_cmeta['currency']}/L)",
+                0.10, 500.0, _default_local, 0.01, "%.3f")
+            manual_price = _inp_local / _sb_fx * 3.785  # store internally as USD/gal
 
     st.markdown("---")
     st.markdown("**⚙️ Settings**")
@@ -212,17 +229,22 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("**🔔 Price Alert**")
     alert_on    = st.checkbox("Notify if price exceeds")
-    if _sb_canadian:
-        alert_limit = st.number_input("Threshold (CAD/L)", 0.50, 4.00,
-                                      1.75, 0.05, "%.2f", disabled=not alert_on)
-    else:
+    if _sb_cmeta["unit"] == "gal":
         alert_limit = st.number_input("Threshold ($/gal)", 1.0, 9.0,
                                       4.50, 0.10, "%.2f", disabled=not alert_on)
+    else:
+        _sb_fx = _FX_FALLBACK.get(_sb_cmeta["currency"], 1.0)
+        _def_thresh = round(4.50 / 3.785 * _sb_fx, 2)
+        alert_limit = st.number_input(
+            f"Threshold ({_sb_cmeta['currency']}/L)", 0.01, 2000.0,
+            _def_thresh, 0.05, "%.3f", disabled=not alert_on)
 
     st.markdown("---")
-    st.markdown('<div class="info-pill">💡 Canadian prices from <b>NRCan</b>. '
-                'US prices from <b>AAA</b>. Crude oil (<b>WTI</b>) via Yahoo Finance.'
-                ' Data refreshes every 12 hours.</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="info-pill">🌍 Global prices from <b>GlobalPetrolPrices.com</b>. '
+        'Canadian prices from <b>NRCan</b>. US prices from <b>AAA</b>. '
+        'Crude oil (<b>WTI</b>) via Yahoo Finance.'
+        ' Data refreshes every 12 hours.</div>', unsafe_allow_html=True)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -231,7 +253,7 @@ with st.sidebar:
 st.markdown(
     '<div class="app-header">'
     '<div class="app-title">⛽ GasWatch</div>'
-    '<div class="app-sub">Gas Price Prediction Engine · North America · ML-Powered</div>'
+    '<div class="app-sub">Gas Price Prediction Engine · Worldwide · ML-Powered</div>'
     '</div>', unsafe_allow_html=True)
 
 hl, hr = st.columns([4, 1])
@@ -249,6 +271,7 @@ with hr:
 city_df  = df[df["city"] == selected].sort_values("date").copy()
 crude    = _crude()
 all_fc   = _all_forecasts(crude)
+_fx      = _fx_rates()
 
 raw_today     = manual_price if (use_manual and manual_price > 0) else float(city_df["price"].iloc[-1])
 raw_yesterday = float(city_df["price"].iloc[-2]) if len(city_df) >= 2 else raw_today
@@ -268,26 +291,31 @@ daily_chg    = today_p   - yesterday_p
 weekly_chg   = today_p   - week_ago_p
 tomorrow_chg = tomorrow_p - today_p
 
-# ── Display unit helpers (CAD/L for Canadian cities, USD/gal for US) ────────
-_is_canadian    = (city_df["country"].iloc[-1] == "CA") if "country" in city_df.columns else False
-_CAD_PER_USD    = 1.36
+# ── Universal display-unit helpers ──────────────────────────────────────────
+_country    = city_df["country"].iloc[-1] if "country" in city_df.columns else "US"
+_cmeta      = COUNTRY_META.get(_country, COUNTRY_META["US"])
+_currency   = _cmeta["currency"]
+_unit_str   = _cmeta["unit"]          # "L" or "gal"
+_CURR       = _cmeta["sym"]
+_UNIT       = f"{_currency}/{_unit_str}"
+_fx_local   = _fx.get(_currency, _FX_FALLBACK.get(_currency, 1.0))
 _LITRES_PER_GAL = 3.785
-_UNIT           = "CAD/L" if _is_canadian else "$/gal"
-_CURR           = "C$"   if _is_canadian else "$"
 
-def _to_disp(usd_gal):
-    """Convert USD/gal → display unit (CAD/L for CA, USD/gal for US)."""
-    return usd_gal * _CAD_PER_USD / _LITRES_PER_GAL if _is_canadian else usd_gal
+def _to_disp(usd_gal: float) -> float:
+    """USD/gal → local currency / local unit."""
+    if _unit_str == "gal":
+        return usd_gal                                    # US: USD/gal
+    return usd_gal / _LITRES_PER_GAL * _fx_local         # everyone else: local/L
 
-def _fmt(usd_gal, d=3):
-    v = _to_disp(usd_gal)
-    return f"{v:.{d}f}"
+def _fmt(usd_gal: float, d: int = 3) -> str:
+    return f"{_to_disp(usd_gal):.{d}f}"
 
-def _fmt_chg(usd_gal_delta, d=3):
-    v = usd_gal_delta * _CAD_PER_USD / _LITRES_PER_GAL if _is_canadian else usd_gal_delta
-    return f"{v:+.{d}f}"
+def _fmt_chg(usd_gal_delta: float, d: int = 3) -> str:
+    return f"{_to_disp(usd_gal_delta):+.{d}f}"
 
-# Display-unit prices (what the user actually sees)
+_yaxis_prefix = "" if _unit_str == "L" else "$"
+
+# Display-unit prices
 today_disp     = _to_disp(today_p)
 yesterday_disp = _to_disp(yesterday_p)
 week_ago_disp  = _to_disp(week_ago_p)
@@ -307,10 +335,12 @@ all_fc["chg"]            = all_fc["tomorrow_typed"] - all_fc["today_typed"]
 all_fc["trend"] = all_fc["chg"].apply(
     lambda x: "🔴 Rising" if x > 0.015 else ("🟢 Falling" if x < -0.015 else "🟡 Stable"))
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Alerts
-# ─────────────────────────────────────────────────────────────────────────────
+# Regional average KPI (same country as selected city)
+_region_fc  = all_fc[all_fc["country"] == _country] if "country" in all_fc.columns else all_fc
+_region_avg_usd = _region_fc["today_typed"].mean() if len(_region_fc) else today_p
+_avg_val   = _to_disp(_region_avg_usd)
+_avg_label = f"{_country} Avg · {gas_type}"
+_avg_n     = len(_region_fc)
 if alert_on:
     _cmp_today  = today_disp
     _cmp_tmrw   = tomorrow_disp
@@ -334,19 +364,6 @@ if alert_on:
 # KPI cards
 # ─────────────────────────────────────────────────────────────────────────────
 k1, k2, k3, k4, k5 = st.columns(5)
-
-# KPI averages — split US vs Canada
-_us_fc = all_fc[all_fc["city"].map(lambda c: not c.endswith((" ON"," BC"," AB"," QC"," MB")))]
-_ca_fc = all_fc[all_fc["city"].map(lambda c:     c.endswith((" ON"," BC"," AB"," QC"," MB")))]
-
-if _is_canadian:
-    _avg_val   = _to_disp(_ca_fc["today_typed"].mean()) if len(_ca_fc) else today_disp
-    _avg_label = f"CA Avg · {gas_type}"
-    _avg_n     = len(_ca_fc)
-else:
-    _avg_val   = _us_fc["today_typed"].mean() if len(_us_fc) else all_fc["today_typed"].mean()
-    _avg_label = f"US Avg · {gas_type}"
-    _avg_n     = len(_us_fc)
 
 for col, label, val, sub, unit, cls in [
     (k1, "Today's Price",    f"{_fmt(today_p, 2)}",
@@ -408,7 +425,7 @@ with tab_dash:
     chart_df = city_df.tail(hist_days).copy()
     chart_df["price_disp"] = chart_df["price"].apply(lambda p: _to_disp(p * multiplier))
     fc_dates = [pd.Timestamp(datetime.now().date() + timedelta(days=i+1)) for i in range(fc_days)]
-    _band_w  = 0.05 * (_CAD_PER_USD / _LITRES_PER_GAL if _is_canadian else 1)
+    _band_w  = 0.05 * (_fx_local / _LITRES_PER_GAL if _unit_str == "L" else 1)
     upper    = [p + _band_w + i*_band_w*0.18 for i, p in enumerate(fc_prices_disp)]
     lower    = [p - _band_w - i*_band_w*0.18 for i, p in enumerate(fc_prices_disp)]
 
@@ -436,7 +453,7 @@ with tab_dash:
                   line_dash="dash", line_color="rgba(255,255,255,.18)",
                   annotation_text="Today",
                   annotation_font_color="rgba(255,255,255,.35)")
-    _yaxis_prefix = "" if _is_canadian else "$"
+    # _yaxis_prefix already set above
     fig.update_layout(
         paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
         font=dict(color="#8ab4cc", size=12),
@@ -500,70 +517,64 @@ with tab_dash:
 # TAB 2 – LIVE MAP  (interactive gas station map)
 # ══════════════════════════════════════════════════════════════════════════════
 with tab_map:
-    from src.data_collector import CITIES, usd_gal_to_cad_litre
+    from src.data_collector import CITIES
 
-    # Canadian cities only for the city picker (this map is Canada-focused)
-    ca_cities = sorted([c for c in df["city"].unique() if CITIES.get(c, {}).get("country") == "CA"])
-    def_map_idx = ca_cities.index("Oakville, ON") if "Oakville, ON" in ca_cities else 0
+    # All cities worldwide
+    all_map_cities = sorted(df["city"].unique().tolist())
+    def_map_idx = all_map_cities.index("Oakville, ON") if "Oakville, ON" in all_map_cities else 0
 
     # ── Controls row ──────────────────────────────────────────────────────
     mc1, mc2, mc3 = st.columns([2, 2, 1])
     with mc1:
         map_city = st.selectbox(
-            "📍 Centre map on Canadian city",
-            options=ca_cities,
+            "📍 Centre map on city",
+            options=all_map_cities,
             index=def_map_idx,
             key="map_city_sel",
         )
     with mc2:
-        map_zoom = st.slider("Zoom level", 11, 17, 13, key="map_zoom_sl")
+        map_zoom = st.slider("Zoom level", 9, 17, 13, key="map_zoom_sl")
     with mc3:
         st.markdown("<br>", unsafe_allow_html=True)
         reload_map = st.button("🔄 Reload Map", key="map_reload")
 
-    # City info for centring — always Canadian
     city_info   = CITIES.get(map_city, {})
     map_lat     = city_info.get("lat", 43.45)
     map_lon     = city_info.get("lon", -79.68)
-    map_country = "CA"   # this map is Canada-focused
+    map_country = city_info.get("country", "CA")
 
-    # Instruction banner
     st.markdown(
-        '<div class="info-pill">🍁 Gas stations plotted from <b>NRCan city price data</b> '
-        'with realistic brand offsets. Prices anchored to live NRCan city averages. '
-        'Click <b>📍 My Location</b> to centre on your position. '
-        'Zoom into any station pin for the live price and 7-day forecast. '
-        'Adjust the <b>Radius slider</b> to show nearby stations.</div>',
+        '<div class="info-pill">🌍 Worldwide gas station map powered by <b>OpenStreetMap</b>. '
+        'Prices anchored to live national averages from <b>NRCan</b>, <b>AAA</b>, and '
+        '<b>GlobalPetrolPrices.com</b>. '
+        'Use the <b>search bar</b> to jump to any address worldwide. '
+        'Click <b>📍 My Location</b> to centre on your position.</div>',
         unsafe_allow_html=True
     )
 
-    # Build city_prices dict and render the Leaflet map
     city_prices = _station_map_prices(crude)
     map_html    = build_station_map_html(
         center_lat=map_lat,
         center_lon=map_lon,
         city_prices=city_prices,
-        country="CA",
+        country=map_country,
         zoom=map_zoom,
         height_px=620,
     )
     components.html(map_html, height=680, scrolling=False)
 
-    # ── Canadian city rankings table ──────────────────────────────────────
-    st.markdown('<div class="sh">🍁 Canadian Cities — Ranked by Today\'s Price (CAD/L)</div>',
+    # ── World cities rankings table ────────────────────────────────────────
+    st.markdown('<div class="sh">🌍 All Cities — Ranked by Today\'s Price (USD/L equiv.)</div>',
                 unsafe_allow_html=True)
-    ca_rank = all_fc[all_fc["city"].isin(ca_cities)].copy()
-    # Convert USD/gal → CAD/L for display
-    _CAD_L = lambda usd: round(usd * 1.36 / 3.785, 3)
-    ca_rank["Today (CAD/L)"]    = ca_rank["today_typed"].apply(_CAD_L)
-    ca_rank["Tomorrow (CAD/L)"] = ca_rank["tomorrow_typed"].apply(_CAD_L)
-    ca_rank["Δ (CAD/L)"]        = (ca_rank["tomorrow_typed"] - ca_rank["today_typed"]).apply(
-                                      lambda x: f"{_CAD_L(x):+.3f}")
-    ca_rank = ca_rank.sort_values("Today (CAD/L)")[["city", "state", "Today (CAD/L)", "Tomorrow (CAD/L)", "Δ (CAD/L)", "trend"]]
-    ca_rank.columns = ["City", "Province", "Today (CAD/L)", "Tomorrow (CAD/L)", "Δ (CAD/L)", "Trend"]
-    ca_rank["Today (CAD/L)"]    = ca_rank["Today (CAD/L)"].map("{:.3f}".format)
-    ca_rank["Tomorrow (CAD/L)"] = ca_rank["Tomorrow (CAD/L)"].map("{:.3f}".format)
-    st.dataframe(ca_rank.set_index("City"), use_container_width=True, height=320)
+    world_rank = all_fc.copy()
+    world_rank["USD/L"]        = (world_rank["today_typed"] / 3.785).round(3)
+    world_rank["USD/L tmrw"]   = (world_rank["tomorrow_typed"] / 3.785).round(3)
+    world_rank["Δ USD/L"]      = (world_rank["USD/L tmrw"] - world_rank["USD/L"]).apply(lambda x: f"{x:+.3f}")
+    world_rank = world_rank.sort_values("USD/L")[["city","country","state","USD/L","USD/L tmrw","Δ USD/L","trend"]]
+    world_rank.columns = ["City","Country","Region","Today (USD/L)","Tomorrow (USD/L)","Δ (USD/L)","Trend"]
+    world_rank["Today (USD/L)"]    = world_rank["Today (USD/L)"].map("{:.3f}".format)
+    world_rank["Tomorrow (USD/L)"] = world_rank["Tomorrow (USD/L)"].map("{:.3f}".format)
+    st.dataframe(world_rank.set_index("City"), use_container_width=True, height=400)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -586,14 +597,14 @@ with tab_compare:
                 x=cdf["date"], y=cdf["price"]*multiplier,
                 mode="lines", name=city,
                 line=dict(color=palette[i%len(palette)], width=2),
-                hovertemplate=f"<b>{city}</b><br>%{{x|%b %d}}: $%{{y:.3f}}/gal<extra></extra>"))
+                hovertemplate=f"<b>{city}</b><br>%{{x|%b %d}}: %{{y:.3f}} USD/gal equiv.<extra></extra>"))
         cmp_fig.update_layout(
             paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
             font=dict(color="#8ab4cc"),
             xaxis=dict(gridcolor="rgba(255,255,255,.04)", tickformat="%b %d",
                        tickfont=dict(color="#4a6a7c")),
             yaxis=dict(gridcolor="rgba(255,255,255,.04)", tickprefix="$",
-                       title="Price ($/gal)", tickfont=dict(color="#4a6a7c")),
+                       title="Price (USD/gal equiv.)", tickfont=dict(color="#4a6a7c")),
             legend=dict(bgcolor="rgba(0,0,0,.5)",
                         bordercolor="rgba(255,255,255,.08)", borderwidth=1),
             hovermode="x unified",
@@ -737,11 +748,11 @@ with tab_calc:
     st.markdown('<div class="sh">⛽ Fill-Up Cost Calculator</div>', unsafe_allow_html=True)
     cc1, cc2 = st.columns(2)
     with cc1:
-        if _is_canadian:
+        if _unit_str == "L":
             tank_size_l  = st.number_input("Tank size (litres)", 20.0, 120.0, 55.0, 1.0)
             tank_level   = st.slider("Current tank level (%)", 0, 100, 25)
             litres_need  = tank_size_l * (1 - tank_level/100)
-            gallons_need = litres_need / _LITRES_PER_GAL  # for internal calc
+            gallons_need = litres_need / _LITRES_PER_GAL
         else:
             tank_size    = st.number_input("Tank size (gallons)", 5.0, 50.0, 15.0, 0.5)
             tank_level   = st.slider("Current tank level (%)", 0, 100, 25)
@@ -752,12 +763,12 @@ with tab_calc:
         price_usd   = tomorrow_p if use_tmrw else today_p
         price_d_val = tomorrow_disp if use_tmrw else today_disp
         lbl_used    = "Tomorrow's forecast" if use_tmrw else "Today's price"
-        total_cost  = gallons_need * price_usd   # internally USD
-        total_disp_val = total_cost * (_CAD_PER_USD if _is_canadian else 1.0)
-        savings_usd    = gallons_need * (today_p - tomorrow_p)
-        savings_disp   = savings_usd  * (_CAD_PER_USD if _is_canadian else 1.0)
-        vol_str     = f"{litres_need:.1f} L" if _is_canadian else f"{gallons_need:.1f} gal"
-        curr_sym    = "C$" if _is_canadian else "$"
+        total_cost_usd  = gallons_need * price_usd
+        total_disp_val  = total_cost_usd / _LITRES_PER_GAL * _fx_local if _unit_str == "L" else total_cost_usd
+        savings_usd     = gallons_need * (today_p - tomorrow_p)
+        savings_disp    = savings_usd / _LITRES_PER_GAL * _fx_local if _unit_str == "L" else savings_usd
+        vol_str     = f"{litres_need:.1f} L" if _unit_str == "L" else f"{gallons_need:.1f} gal"
+        curr_sym    = _CURR
 
     st.markdown(
         f'<div class="calc-result">'
@@ -781,34 +792,31 @@ with tab_calc:
                 f'{tomorrow_chg_disp:+.3f} {_UNIT} (extra cost {curr_sym}{abs(savings_disp):.2f}).</div>',
                 unsafe_allow_html=True)
 
-    # Fill-up cost across all cities (always in local currency)
-    st.markdown('<div class="sh">🗺️ Same Fill-Up Cost — All Cities</div>',
+    # Fill-up cost across all cities (USD equivalent for fair comparison)
+    st.markdown('<div class="sh">🌍 Same Fill-Up Cost — All Cities (USD equivalent)</div>',
                 unsafe_allow_html=True)
     fill_df = all_fc[["city","today_typed"]].copy()
-    # For chart use USD fill cost for consistent comparison, label with $ or C$
     fill_df["fill_cost_usd"] = fill_df["today_typed"] * gallons_need
-    fill_df["is_ca"] = fill_df["city"].str.endswith((" ON"," BC"," AB"," QC"," MB"))
-    fill_df["fill_cost_disp"] = fill_df.apply(
-        lambda r: r["fill_cost_usd"] * _CAD_PER_USD if r["is_ca"] else r["fill_cost_usd"], axis=1)
-    fill_df = fill_df.sort_values("fill_cost_disp")
+    fill_df = fill_df.sort_values("fill_cost_usd")
     fill_fig = go.Figure(go.Bar(
-        x=fill_df["city"], y=fill_df["fill_cost_disp"],
-        marker=dict(color=fill_df["fill_cost_disp"],
+        x=fill_df["city"], y=fill_df["fill_cost_usd"],
+        marker=dict(color=fill_df["fill_cost_usd"],
                     colorscale=[[0,"#51cf66"],[0.5,"#ffd43b"],[1,"#ff6b6b"]],
                     showscale=False),
-        text=fill_df.apply(lambda r: f"{'C$' if r['is_ca'] else '$'}{r['fill_cost_disp']:.2f}", axis=1),
+        text=fill_df["fill_cost_usd"].apply(lambda v: f"${v:.2f}"),
         textposition="outside",
         textfont=dict(color="#8ab4cc", size=9),
-        hovertemplate="<b>%{x}</b><br>Fill-up: %{text}<extra></extra>"))
+        hovertemplate="<b>%{x}</b><br>Fill-up (USD): $%{y:.2f}<extra></extra>"))
+    _selected_fill_usd = gallons_need * today_p
     fill_fig.add_hline(
-        y=total_disp_val, line_dash="dash", line_color="rgba(253,121,168,.6)",
-        annotation_text=f"{selected} ({curr_sym}{total_disp_val:.2f})",
+        y=_selected_fill_usd, line_dash="dash", line_color="rgba(253,121,168,.6)",
+        annotation_text=f"{selected} (${_selected_fill_usd:.2f})",
         annotation_font_color="rgba(253,121,168,.8)")
     fill_fig.update_layout(
         paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
         font=dict(color="#8ab4cc"),
-        yaxis=dict(gridcolor="rgba(255,255,255,.04)",
-                   title="Fill-up cost (local currency)", tickfont=dict(color="#4a6a7c")),
+        yaxis=dict(gridcolor="rgba(255,255,255,.04)", tickprefix="$",
+                   title="Fill-up cost (USD equiv.)", tickfont=dict(color="#4a6a7c")),
         xaxis=dict(tickfont=dict(color="#4a6a7c"), tickangle=-45),
         margin=dict(l=10,r=10,t=10,b=130), height=420)
     st.plotly_chart(fill_fig, use_container_width=True)
